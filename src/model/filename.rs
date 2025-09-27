@@ -35,6 +35,18 @@ pub fn html_filename(subject: &str, ulid: &str) -> String {
     format!(".{} ({ulid}).html", subject_to_slug(subject))
 }
 
+pub fn outbox_message_filename(ulid: &str) -> String {
+    format!("{ulid}.eml")
+}
+
+pub fn outbox_sidecar_filename(ulid: &str) -> String {
+    format!(".{ulid}.yml")
+}
+
+pub fn outbox_html_filename(ulid: &str) -> String {
+    format!(".{ulid}.html")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,6 +71,14 @@ mod tests {
     fn filenames_include_ulid() {
         let fname = message_filename("Hello", "01ABC");
         assert!(fname.contains("01ABC"));
+    }
+
+    #[test]
+    fn outbox_filenames_match_spec() {
+        let ulid = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        assert_eq!(outbox_message_filename(ulid), format!("{ulid}.eml"));
+        assert_eq!(outbox_sidecar_filename(ulid), format!(".{ulid}.yml"));
+        assert_eq!(outbox_html_filename(ulid), format!(".{ulid}.html"));
     }
 
     proptest! {

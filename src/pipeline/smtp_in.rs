@@ -10,9 +10,9 @@ use crate::{
     model::{
         address::Address,
         filename::{html_filename, message_filename, sidecar_filename},
-        message::{HeadersCache, MessageSidecar},
+        message::{HeadersCache, MessageSidecar, RspamdSummary},
     },
-    pipeline::render::sanitize_html,
+    pipeline::render::{render_plaintext, sanitize_html},
     ruleset::eval::Route,
     util::{size::parse_size, ulid},
 };
@@ -145,11 +145,15 @@ impl InboundPipeline {
             html_body,
             text_body,
             attachments,
+            rspamd,
         } = parse_email(body)?;
+        let text_for_plain = text_body.clone();
         let html_input = html_body
-            .or_else(|| text_body.map(|text| plaintext_to_html(&text)))
+            .or_else(|| text_body.clone().map(|text| plaintext_to_html(&text)))
             .unwrap_or_else(|| "<pre></pre>".to_string());
         let sanitized_html = sanitize_html(&html_input)?;
+        let plain_render = render_plaintext(&sanitized_html)
+            .unwrap_or_else(|_| text_for_plain.unwrap_or_default());
 
         let headers = HeadersCache::new(sender.to_string(), subject.to_string());
         let mut sidecar = MessageSidecar::new(
@@ -161,6 +165,14 @@ impl InboundPipeline {
             hash,
             headers,
         );
+        if let Some(summary) = rspamd {
+            sidecar.set_rspamd(summary);
+        }
+        let txt_name = format!(
+            ".{}",
+            html_name.trim_start_matches('.').replace(".html", ".txt")
+        );
+        sidecar.set_plain_render(txt_name.clone());
         if let Some(list) = attachments_list {
             let store = AttachmentStore::new(self.layout.attachments(list));
             for attachment in attachments {
@@ -171,6 +183,7 @@ impl InboundPipeline {
         let yaml = serde_yaml::to_string(&sidecar)?;
         write_atomic(&dir.join(&sidecar_name), yaml.as_bytes())?;
         write_atomic(&dir.join(&html_name), sanitized_html.as_bytes())?;
+        write_atomic(&dir.join(&txt_name), plain_render.as_bytes())?;
         Ok(message_path)
     }
 
@@ -194,6 +207,7 @@ struct ParsedEmail {
     html_body: Option<String>,
     text_body: Option<String>,
     attachments: Vec<EmailAttachment>,
+    rspamd: Option<RspamdSummary>,
 }
 
 struct EmailAttachment {
@@ -204,6 +218,7 @@ struct EmailAttachment {
 fn parse_email(body: &[u8]) -> Result<ParsedEmail> {
     let parsed = parse_mail(body).map_err(|err| anyhow!(err.to_string()))?;
     let mut result = ParsedEmail::default();
+    result.rspamd = extract_rspamd(&parsed);
     collect_parts(&parsed, &mut result)?;
     Ok(result)
 }
@@ -267,6 +282,28 @@ fn plaintext_to_html(text: &str) -> String {
         }
     }
     format!("<pre>{}</pre>", escaped)
+}
+
+fn extract_rspamd(parsed: &ParsedMail) -> Option<RspamdSummary> {
+    let mut score = None;
+    let mut symbols = Vec::new();
+    for header in &parsed.headers {
+        let key = header.get_key_ref();
+        if key.eq_ignore_ascii_case("X-Spam-Score") || key.eq_ignore_ascii_case("X-Rspamd-Score") {
+            let value = header.get_value();
+            score = value.trim().parse::<f32>().ok();
+        }
+        if key.eq_ignore_ascii_case("X-Spam-Symbols") || key.eq_ignore_ascii_case("X-Rspamd-Report")
+        {
+            let value = header.get_value();
+            symbols = value
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+    score.map(|score| RspamdSummary { score, symbols })
 }
 
 #[cfg(test)]
@@ -342,6 +379,9 @@ mod tests {
             )
             .unwrap();
             assert!(sidecar.attachments.is_empty());
+            let plain_path = path.with_file_name(format!(".{stem}.txt"));
+            assert!(plain_path.exists());
+            assert_eq!(sidecar.render.plain.unwrap(), format!(".{stem}.txt"));
         });
     }
 
@@ -354,7 +394,7 @@ mod tests {
             let env = EnvConfig::default();
             let pipeline = InboundPipeline::new(layout.clone(), env).unwrap();
             let sender = Address::parse("carol@example.org", false).unwrap();
-            let accepted_body = b"Subject: Hi\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=BOUND\r\n\r\n--BOUND\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body>Hello<script>alert(1)</script></body></html>\r\n--BOUND\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"note.txt\"\r\nContent-Transfer-Encoding: base64\r\n\r\nSGVsbG8=\r\n--BOUND--\r\n";
+            let accepted_body = b"Subject: Hi\r\nX-Spam-Score: 0.0\r\nX-Spam-Symbols: BAYES_GOOD\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=BOUND\r\n\r\n--BOUND\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body>Hello<script>alert(1)</script></body></html>\r\n--BOUND\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"note.txt\"\r\nContent-Transfer-Encoding: base64\r\n\r\nSGVsbG8=\r\n--BOUND--\r\n";
             let path = pipeline
                 .deliver_to_route(Route::Accepted, &sender, "Greetings", accepted_body)
                 .unwrap();
@@ -365,8 +405,16 @@ mod tests {
             let sidecar: MessageSidecar = serde_yaml::from_str(&yaml).unwrap();
             assert_eq!(sidecar.status_shadow, "accepted");
             assert_eq!(sidecar.render.html, format!(".{stem}.html"));
+            let expected_plain = format!(".{stem}.txt");
+            assert_eq!(
+                sidecar.render.plain.as_deref(),
+                Some(expected_plain.as_str())
+            );
             assert_eq!(sidecar.attachments.len(), 1);
             assert_eq!(sidecar.attachments[0].name, "note.txt");
+            let rspamd = sidecar.rspamd.expect("rspamd metadata");
+            assert!(rspamd.score.abs() < 0.0001);
+            assert_eq!(rspamd.symbols, vec!["BAYES_GOOD".to_string()]);
             let html_path = path.with_file_name(format!(".{stem}.html"));
             let html = std::fs::read_to_string(&html_path).unwrap();
             assert!(html.contains("[blocked]"));
