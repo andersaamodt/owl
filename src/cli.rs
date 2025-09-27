@@ -1,17 +1,33 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use duct::cmd;
+use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+use mailparse::{self, MailAddr, MailHeaderMap};
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
-    fs,
+    collections::{HashMap, HashSet},
+    fs::{self, File},
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
 };
+use tar::{Archive, Builder};
 
 use crate::{
     envcfg::EnvConfig,
     fsops::{io_atom::write_atomic, layout::MailLayout},
     model::{address::Address, message::MessageSidecar},
-    ruleset::loader::RulesetLoader,
+    ops::install as ops_install,
+    pipeline::{
+        inbound::determine_route,
+        outbox::{DispatchResult, OutboxPipeline},
+        smtp_in::InboundPipeline,
+    },
+    ruleset::loader::{LoadedRules, RulesetLoader},
+    util::{
+        dkim,
+        logging::{self, LogLevel, Logger},
+    },
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "owl", version, about = "File-first mail system")]
@@ -94,46 +110,128 @@ const DEFAULT_ENV_PATH: &str = "/home/pi/mail/.env";
 
 pub fn run(cli: OwlCli, env: EnvConfig) -> Result<String> {
     let env_path = resolve_env_path(&cli.env)?;
+    let root = mail_root(&env_path);
+    let log_level = env.logging.parse::<LogLevel>().unwrap_or(LogLevel::Minimal);
+    let logger = Logger::new(root.clone(), log_level)?;
     match cli.command.unwrap_or(Commands::Triage {
         address: None,
         list: None,
     }) {
-        Commands::Install => install(&env_path, &env),
-        Commands::Update => Ok("update".to_string()),
-        Commands::Restart { target } => Ok(format!("restart:{target:?}")),
+        Commands::Install => install(&env_path, &env, &logger),
+        Commands::Update => update(&env_path, &env, &logger),
+        Commands::Restart { target } => restart(&env_path, target, &logger),
         Commands::Reload => reload(&env_path),
-        Commands::Triage { address, list } => Ok(format!(
-            "triage:{}:{}:{}",
-            env.render_mode,
-            address.unwrap_or_default(),
-            list.unwrap_or_default()
-        )),
+        Commands::Triage { address, list } => triage(&env_path, &env, address, list, cli.json),
         Commands::ListSenders { list } => list_senders(&env_path, list),
         Commands::MoveSender { from, to, address } => {
             move_sender(&env_path, &env, from, to, address)
         }
-        Commands::Pin { address, unset } => Ok(format!("pin:{address}:{unset}")),
-        Commands::Send { draft } => Ok(format!("send:{draft}")),
-        Commands::Backup { path } => Ok(path.display().to_string()),
+        Commands::Pin { address, unset } => pin_address(&env_path, &env, address, unset),
+        Commands::Send { draft } => send_draft(&env_path, &env, &logger, &draft),
+        Commands::Backup { path } => backup_mail(&env_path, &path),
         Commands::ExportSender {
             list,
             address,
             path,
-        } => Ok(format!("export:{list}:{address}:{}", path.display())),
-        Commands::Import { source } => Ok(format!("import:{}", source.display())),
-        Commands::Logs { action } => Ok(format!("logs:{action:?}")),
+        } => export_sender(&env_path, &env, &list, &address, &path),
+        Commands::Import { source } => import_archive(&env_path, &source),
+        Commands::Logs { action } => logs(&root, log_level, action, cli.json),
     }
 }
 
-fn install(env_path: &Path, env: &EnvConfig) -> Result<String> {
+fn install(env_path: &Path, env: &EnvConfig, logger: &Logger) -> Result<String> {
     let root = mail_root(env_path);
     let layout = MailLayout::new(&root);
     layout.ensure()?;
+    logger.log(
+        LogLevel::Minimal,
+        "install.ensure",
+        Some(&format!("root={}", root.display())),
+    )?;
+    let dkim_material = dkim::ensure_ed25519_keypair(&layout.dkim_dir(), &env.dkim_selector)?;
+    logger.log(
+        LogLevel::Minimal,
+        "install.dkim.ready",
+        Some(&format!(
+            "selector={} public_key={} dns={}",
+            env.dkim_selector,
+            dkim_material.public_key,
+            dkim_material.dns_record_path.display()
+        )),
+    )?;
+    ops_install::provision(&layout, env, logger)?;
     if !env_path.exists() {
         write_atomic(env_path, env.to_env_string().as_bytes())
             .with_context(|| format!("writing {}", env_path.display()))?;
+        logger.log(
+            LogLevel::Minimal,
+            "install.env.created",
+            Some(&format!("path={}", env_path.display())),
+        )?;
+    } else {
+        logger.log(
+            LogLevel::VerboseSanitized,
+            "install.env.skipped",
+            Some(&format!("path={}", env_path.display())),
+        )?;
     }
     Ok(format!("installed {}", root.display()))
+}
+
+fn update(env_path: &Path, env: &EnvConfig, logger: &Logger) -> Result<String> {
+    let root = mail_root(env_path);
+    let layout = MailLayout::new(&root);
+    layout.ensure()?;
+    ops_install::provision(&layout, env, logger)?;
+    logger.log(
+        LogLevel::Minimal,
+        "update.provisioned",
+        Some(&format!("root={}", root.display())),
+    )?;
+    Ok(format!("updated {}", root.display()))
+}
+
+fn restart(env_path: &Path, target: RestartTarget, logger: &Logger) -> Result<String> {
+    let services: Vec<&str> = match target {
+        RestartTarget::All => vec!["postfix", "owl-daemon"],
+        RestartTarget::Postfix => vec!["postfix"],
+        RestartTarget::Daemons => vec!["owl-daemon"],
+    };
+    let mut results = Vec::new();
+    for service in services {
+        match cmd("systemctl", ["restart", service])
+            .stderr_capture()
+            .stdout_capture()
+            .run()
+        {
+            Ok(_) => {
+                logger.log(
+                    LogLevel::Minimal,
+                    "restart.service",
+                    Some(&format!("service={service} status=ok")),
+                )?;
+                results.push(format!("{service}=ok"));
+            }
+            Err(err) => {
+                logger.log(
+                    LogLevel::Minimal,
+                    "restart.service.error",
+                    Some(&format!("service={service} error={err}")),
+                )?;
+                results.push(format!("{service}=error"));
+            }
+        }
+    }
+    let target_name = match target {
+        RestartTarget::All => "all",
+        RestartTarget::Postfix => "postfix",
+        RestartTarget::Daemons => "daemons",
+    };
+    Ok(format!(
+        "restart {target_name} -> {} (root={})",
+        results.join(","),
+        mail_root(env_path).display()
+    ))
 }
 
 fn reload(env_path: &Path) -> Result<String> {
@@ -146,6 +244,35 @@ fn reload(env_path: &Path) -> Result<String> {
     Ok(format!(
         "reloaded rules: accepted={accepted} spam={spam} banned={banned}"
     ))
+}
+
+fn logs(root: &Path, level: LogLevel, action: LogAction, json: bool) -> Result<String> {
+    if level == LogLevel::Off {
+        return Ok(if json {
+            "[]".to_string()
+        } else {
+            "logging disabled".to_string()
+        });
+    }
+    let layout = MailLayout::new(root);
+    let log_path = layout.log_file();
+    let entries = Logger::load_entries(&log_path)?;
+    let slice = if action == LogAction::Tail {
+        logging::tail(&entries, 50)
+    } else {
+        &entries
+    };
+    if json {
+        return Ok(serde_json::to_string(slice)?);
+    }
+    if slice.is_empty() {
+        return Ok("no log entries".to_string());
+    }
+    Ok(slice
+        .iter()
+        .map(|entry| entry.format_human())
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 fn list_senders(env_path: &Path, list: Option<String>) -> Result<String> {
@@ -173,6 +300,168 @@ fn list_senders(env_path: &Path, list: Option<String>) -> Result<String> {
         }
         senders.sort();
         sections.push(format!("{list_name}:{}", senders.join(",")));
+    }
+
+    Ok(sections.join("\n"))
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct TriageEntry {
+    list: String,
+    address: String,
+    ulid: String,
+    subject: String,
+    status: String,
+    read: bool,
+    pinned: bool,
+    rspamd: Option<RspamdView>,
+    outbound: Option<OutboundView>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct RspamdView {
+    score: f32,
+    symbols: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct OutboundView {
+    status: String,
+    attempts: u32,
+    last_error: Option<String>,
+    next_attempt_at: Option<String>,
+}
+
+fn triage(
+    env_path: &Path,
+    env: &EnvConfig,
+    address: Option<String>,
+    list: Option<String>,
+    json: bool,
+) -> Result<String> {
+    let root = mail_root(env_path);
+    let layout = MailLayout::new(&root);
+    let mut entries = Vec::new();
+    let filter_address = match address {
+        Some(addr) => {
+            let parsed = Address::parse(&addr, env.keep_plus_tags)?;
+            Some(parsed.canonical().to_string())
+        }
+        None => None,
+    };
+    let lists = match list {
+        Some(name) => vec![validate_list_name(&name)?.to_string()],
+        None => vec!["quarantine".to_string()],
+    };
+
+    for list_name in &lists {
+        let base_dir = match list_name.as_str() {
+            "accepted" => layout.accepted(),
+            "spam" => layout.spam(),
+            "banned" => layout.banned(),
+            "quarantine" => layout.quarantine(),
+            other => bail!("unsupported list for triage: {other}"),
+        };
+        let mut senders = Vec::new();
+        if let Some(filter) = &filter_address {
+            senders.push(filter.clone());
+        } else if base_dir.exists() {
+            for entry in fs::read_dir(&base_dir)? {
+                let entry = entry?;
+                if !entry.file_type()?.is_dir() {
+                    continue;
+                }
+                if list_name != "quarantine" && entry.file_name() == "attachments" {
+                    continue;
+                }
+                senders.push(entry.file_name().to_string_lossy().into_owned());
+            }
+            senders.sort();
+        }
+
+        for sender in senders {
+            let sender_dir = base_dir.join(&sender);
+            if !sender_dir.exists() {
+                continue;
+            }
+            for message in sidecar_files(&sender_dir)? {
+                let yaml = fs::read_to_string(&message)?;
+                let sidecar: MessageSidecar = serde_yaml::from_str(&yaml)?;
+                let rspamd = sidecar.rspamd.as_ref().map(|summary| RspamdView {
+                    score: summary.score,
+                    symbols: summary.symbols.clone(),
+                });
+                let outbound = sidecar.outbound.as_ref().map(|out| OutboundView {
+                    status: format!("{:?}", out.status),
+                    attempts: out.attempts,
+                    last_error: out.last_error.clone(),
+                    next_attempt_at: out.next_attempt_at.clone(),
+                });
+                entries.push(TriageEntry {
+                    list: list_name.clone(),
+                    address: sender.clone(),
+                    ulid: sidecar.ulid.clone(),
+                    subject: sidecar.headers_cache.subject.clone(),
+                    status: sidecar.status_shadow.clone(),
+                    read: sidecar.read,
+                    pinned: sidecar.pinned,
+                    rspamd,
+                    outbound,
+                });
+            }
+        }
+    }
+
+    if json {
+        return Ok(serde_json::to_string(&entries)?);
+    }
+
+    if entries.is_empty() {
+        return Ok("no messages matched".into());
+    }
+
+    let mut grouped: HashMap<&str, Vec<&TriageEntry>> = HashMap::new();
+    for entry in &entries {
+        grouped.entry(&entry.list).or_default().push(entry);
+    }
+
+    let mut sections = Vec::new();
+    for list_name in &lists {
+        sections.push(format!("{list_name}:"));
+        if let Some(items) = grouped.get(list_name.as_str()) {
+            for entry in items {
+                let mut extra = Vec::new();
+                if let Some(rspamd) = &entry.rspamd {
+                    extra.push(format!("rspamd={:.1}", rspamd.score));
+                }
+                if let Some(outbound) = &entry.outbound {
+                    extra.push(format!(
+                        "outbound={} attempts={}",
+                        outbound.status, outbound.attempts
+                    ));
+                    if let Some(err) = &outbound.last_error {
+                        extra.push(format!("last_error={err}"));
+                    }
+                }
+                let extras = if extra.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", extra.join(", "))
+                };
+                sections.push(format!(
+                    "  {address} :: {subject} ({ulid}) status={status} read={read} pinned={pinned}{extras}",
+                    address = entry.address,
+                    subject = entry.subject,
+                    ulid = entry.ulid,
+                    status = entry.status,
+                    read = entry.read,
+                    pinned = entry.pinned,
+                    extras = extras
+                ));
+            }
+        } else {
+            sections.push("  (no messages)".into());
+        }
     }
 
     Ok(sections.join("\n"))
@@ -248,6 +537,35 @@ fn list_has_attachments(list: &str) -> bool {
     matches!(list, "accepted" | "spam" | "banned")
 }
 
+fn pin_address(env_path: &Path, env: &EnvConfig, address: String, unset: bool) -> Result<String> {
+    let parsed = Address::parse(&address, env.keep_plus_tags)?;
+    let canonical = parsed.canonical().to_string();
+    let root = mail_root(env_path);
+    let layout = MailLayout::new(&root);
+    let mut updated = 0;
+    for list in ["accepted", "spam", "banned", "quarantine"] {
+        let sender_dir = layout.root().join(list).join(&canonical);
+        if !sender_dir.exists() {
+            continue;
+        }
+        for path in sidecar_files(&sender_dir)? {
+            let yaml = fs::read_to_string(&path)?;
+            let mut sidecar: MessageSidecar = serde_yaml::from_str(&yaml)?;
+            if sidecar.pinned != !unset {
+                sidecar.pinned = !unset;
+                let rendered = serde_yaml::to_string(&sidecar)?;
+                write_atomic(&path, rendered.as_bytes())?;
+                updated += 1;
+            }
+        }
+    }
+    if updated == 0 {
+        bail!("no messages found for {canonical}");
+    }
+    let state = if unset { "unpinned" } else { "pinned" };
+    Ok(format!("{state} {canonical} ({updated} messages)"))
+}
+
 fn update_sidecars_for_move(
     dir: &Path,
     new_status: &str,
@@ -279,6 +597,308 @@ fn update_sidecars_for_move(
         write_atomic(&path, yaml.as_bytes())?;
     }
     Ok(attachments)
+}
+
+fn sidecar_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    if !dir.exists() {
+        return Ok(files);
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("yml") {
+            files.push(path);
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+fn send_draft(env_path: &Path, env: &EnvConfig, logger: &Logger, draft: &str) -> Result<String> {
+    let root = mail_root(env_path);
+    let layout = MailLayout::new(&root);
+    let pipeline = OutboxPipeline::new(layout.clone(), env.clone(), logger.clone());
+    let draft_path = resolve_draft_path(&layout, draft)?;
+    if !draft_path.exists() {
+        bail!("draft {} not found", draft_path.display());
+    }
+    let message_path = pipeline.queue_draft(&draft_path)?;
+    if draft_path.starts_with(layout.drafts()) {
+        let _ = fs::remove_file(&draft_path);
+    }
+    let results = pipeline.dispatch_pending()?;
+    let sent = results
+        .iter()
+        .filter(|result| matches!(result, DispatchResult::Sent(_)))
+        .count();
+    let retried = results
+        .iter()
+        .filter(|result| matches!(result, DispatchResult::Retry(_)))
+        .count();
+    let ulid = message_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default()
+        .to_string();
+    Ok(format!(
+        "queued {ulid} -> sent={sent} retry={retried} outbox={}",
+        layout.outbox().display()
+    ))
+}
+
+fn resolve_draft_path(layout: &MailLayout, draft: &str) -> Result<PathBuf> {
+    let candidate = PathBuf::from(draft);
+    if candidate.is_absolute() || candidate.exists() {
+        return Ok(candidate);
+    }
+    let drafts_dir = layout.drafts();
+    let with_suffix = if draft.ends_with(".md") {
+        drafts_dir.join(draft)
+    } else {
+        drafts_dir.join(format!("{draft}.md"))
+    };
+    if with_suffix.exists() {
+        return Ok(with_suffix);
+    }
+    Err(anyhow!("draft {draft} not found"))
+}
+
+fn backup_mail(env_path: &Path, target: &Path) -> Result<String> {
+    let root = mail_root(env_path);
+    if let Some(parent) = target.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let file = File::create(target).with_context(|| format!("creating {}", target.display()))?;
+    let encoder = GzEncoder::new(file, Compression::default());
+    let mut builder = Builder::new(encoder);
+    builder.append_dir_all(".", &root)?;
+    let encoder = builder.into_inner()?;
+    encoder.finish()?;
+    Ok(format!("backup written to {}", target.display()))
+}
+
+fn export_sender(
+    env_path: &Path,
+    env: &EnvConfig,
+    list: &str,
+    address: &str,
+    target: &Path,
+) -> Result<String> {
+    let list_name = validate_list_name(list)?;
+    let parsed = Address::parse(address, env.keep_plus_tags)?;
+    let canonical = parsed.canonical().to_string();
+    let root = mail_root(env_path);
+    let layout = MailLayout::new(&root);
+    let sender_dir = layout.root().join(list_name).join(&canonical);
+    if !sender_dir.exists() {
+        bail!("sender {canonical} not found in {list_name}");
+    }
+    if let Some(parent) = target.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let file = File::create(target).with_context(|| format!("creating {}", target.display()))?;
+    let encoder = GzEncoder::new(file, Compression::default());
+    let mut builder = Builder::new(encoder);
+    builder.append_dir_all(format!("{list_name}/{canonical}"), &sender_dir)?;
+    let attachments = collect_attachments(&sender_dir)?;
+    let attachments_dir = layout.attachments(list_name);
+    for attachment in attachments {
+        let path = attachments_dir.join(&attachment);
+        if path.exists() {
+            builder
+                .append_path_with_name(&path, format!("{list_name}/attachments/{attachment}"))?;
+        }
+    }
+    let encoder = builder.into_inner()?;
+    encoder.finish()?;
+    Ok(format!(
+        "exported {canonical} from {list_name} to {}",
+        target.display()
+    ))
+}
+
+fn collect_attachments(dir: &Path) -> Result<HashSet<String>> {
+    let mut attachments = HashSet::new();
+    for path in sidecar_files(dir)? {
+        let yaml = fs::read_to_string(&path)?;
+        let sidecar: MessageSidecar = serde_yaml::from_str(&yaml)?;
+        for attachment in sidecar.attachments {
+            attachments.insert(format!("{}__{}", attachment.sha256, attachment.name));
+        }
+    }
+    Ok(attachments)
+}
+
+fn import_archive(env_path: &Path, source: &Path) -> Result<String> {
+    if !source.exists() {
+        bail!("source {} not found", source.display());
+    }
+    let root = mail_root(env_path);
+    let env = load_env(env_path)?;
+    let layout = MailLayout::new(&root);
+    layout.ensure()?;
+
+    enum Outcome {
+        Archive,
+        Messages(usize),
+    }
+
+    let outcome = if source.is_dir() {
+        Outcome::Messages(import_maildir(&layout, &env, source)?)
+    } else {
+        let lower_name = source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_ascii_lowercase());
+        let ext = source
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase());
+
+        if ext.as_deref() == Some("mbox")
+            || lower_name
+                .as_deref()
+                .map(|name| name.ends_with(".mbox"))
+                .unwrap_or(false)
+        {
+            Outcome::Messages(import_mbox(&layout, &env, source)?)
+        } else {
+            let file =
+                File::open(source).with_context(|| format!("opening {}", source.display()))?;
+            let lower_name = lower_name.unwrap_or_default();
+            if lower_name.ends_with(".tar.gz")
+                || lower_name.ends_with(".tgz")
+                || ext.as_deref() == Some("gz")
+            {
+                let decoder = GzDecoder::new(file);
+                let mut archive = Archive::new(decoder);
+                archive.unpack(&root)?;
+            } else if ext.as_deref() == Some("tar") {
+                let mut archive = Archive::new(file);
+                archive.unpack(&root)?;
+            } else {
+                bail!("unsupported import format: {}", source.display());
+            }
+            Outcome::Archive
+        }
+    };
+
+    let summary = match outcome {
+        Outcome::Archive => format!("imported {} into {}", source.display(), root.display()),
+        Outcome::Messages(count) => format!(
+            "imported {count} messages from {} into {}",
+            source.display(),
+            root.display()
+        ),
+    };
+
+    Ok(summary)
+}
+
+fn import_maildir(layout: &MailLayout, env: &EnvConfig, dir: &Path) -> Result<usize> {
+    let (pipeline, rules) = inbound_context(layout, env)?;
+    let mut count = 0;
+    for leaf in ["cur", "new"] {
+        let path = dir.join(leaf);
+        if !path.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(&path).with_context(|| format!("reading {}", path.display()))? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                let body = fs::read(entry.path())
+                    .with_context(|| format!("reading {}", entry.path().display()))?;
+                deliver_imported_message(&pipeline, &rules, env, &body)?;
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
+}
+
+fn import_mbox(layout: &MailLayout, env: &EnvConfig, path: &Path) -> Result<usize> {
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let (pipeline, rules) = inbound_context(layout, env)?;
+    let mut current = Vec::new();
+    let mut count = 0;
+    loop {
+        let mut line = Vec::new();
+        let read = reader.read_until(b'\n', &mut line)?;
+        if read == 0 {
+            if !current.is_empty() {
+                deliver_imported_message(&pipeline, &rules, env, &current)?;
+                count += 1;
+            }
+            break;
+        }
+        if line.starts_with(b"From ") {
+            if !current.is_empty() {
+                deliver_imported_message(&pipeline, &rules, env, &current)?;
+                count += 1;
+                current.clear();
+            }
+            continue;
+        }
+        current.extend_from_slice(&line);
+    }
+    Ok(count)
+}
+
+fn inbound_context(layout: &MailLayout, env: &EnvConfig) -> Result<(InboundPipeline, LoadedRules)> {
+    let pipeline = InboundPipeline::new(layout.clone(), env.clone())?;
+    let loader = RulesetLoader::new(layout.root());
+    let rules = loader.load()?;
+    Ok((pipeline, rules))
+}
+
+fn deliver_imported_message(
+    pipeline: &InboundPipeline,
+    rules: &LoadedRules,
+    env: &EnvConfig,
+    body: &[u8],
+) -> Result<()> {
+    let parsed = mailparse::parse_mail(body).map_err(|err| anyhow!(err.to_string()))?;
+    let subject = parsed
+        .headers
+        .get_first_value("Subject")
+        .unwrap_or_else(|| "no subject".to_string());
+    let sender = if let Some(from_value) = parsed.headers.get_first_value("From") {
+        let addresses =
+            mailparse::addrparse(from_value.as_str()).map_err(|err| anyhow!(err.to_string()))?;
+        if let Some(addr) = first_mailbox(&addresses) {
+            Address::parse(&addr, env.keep_plus_tags)
+        } else {
+            Address::parse("unknown@import.invalid", env.keep_plus_tags)
+        }
+    } else {
+        Address::parse("unknown@import.invalid", env.keep_plus_tags)
+    }?;
+    let route = determine_route(&sender, rules, env)?;
+    pipeline.deliver_to_route(route, &sender, &subject, body)?;
+    Ok(())
+}
+
+fn first_mailbox(addrs: &[MailAddr]) -> Option<String> {
+    for addr in addrs {
+        match addr {
+            MailAddr::Single(info) => return Some(info.addr.clone()),
+            MailAddr::Group(group) => {
+                if let Some(first) = group.addrs.first() {
+                    return Some(first.addr.clone());
+                }
+            }
+        }
+    }
+    None
 }
 
 fn resolve_env_path(raw: &str) -> Result<PathBuf> {
@@ -315,11 +935,22 @@ fn mail_root(env_path: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+fn load_env(path: &Path) -> Result<EnvConfig> {
+    if path.exists() {
+        EnvConfig::from_file(path)
+    } else {
+        Ok(EnvConfig::default())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::Parser;
+    use flate2::read::GzDecoder;
+    use serial_test::serial;
     use std::{fs, path::Path};
+    use tar::Archive;
 
     #[test]
     fn parse_restart_default() {
@@ -339,71 +970,347 @@ mod tests {
     }
 
     #[test]
-    fn run_covers_commands() {
+    fn triage_lists_quarantine_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
         let env = EnvConfig::default();
-        let cmds = vec![
-            Commands::Install,
-            Commands::Update,
-            Commands::Restart {
-                target: RestartTarget::Postfix,
-            },
-            Commands::Reload,
-            Commands::Triage {
-                address: Some("a".into()),
-                list: None,
-            },
-            Commands::ListSenders {
-                list: Some("accepted".into()),
-            },
-            Commands::MoveSender {
-                from: "accepted".into(),
-                to: "spam".into(),
-                address: "carol@example.org".into(),
-            },
-            Commands::Pin {
-                address: "a".into(),
-                unset: true,
-            },
-            Commands::Send {
-                draft: "file".into(),
-            },
-            Commands::Backup {
-                path: "./tmp".into(),
-            },
-            Commands::ExportSender {
-                list: "l".into(),
-                address: "a".into(),
-                path: "./out".into(),
-            },
-            Commands::Import {
-                source: "./in".into(),
-            },
-            Commands::Logs {
-                action: LogAction::Tail,
-            },
-        ];
-        let temp = tempfile::tempdir().unwrap();
-        let env_path = temp.path().join(".env");
-        let env_string = env_path.to_string_lossy().into_owned();
-        for command in cmds {
-            let command_clone = command.clone();
-            if let Commands::MoveSender { address, .. } = &command_clone {
-                let layout = MailLayout::new(temp.path());
-                layout.ensure().unwrap();
-                let sender = Address::parse(address, env.keep_plus_tags).unwrap();
-                fs::create_dir_all(layout.accepted().join(sender.canonical())).unwrap();
-            }
-            let cli = OwlCli {
-                env: env_string.clone(),
-                command: Some(command_clone),
-                json: false,
-            };
-            let result = run(cli, env.clone());
-            assert!(result.is_ok());
-        }
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let sender_dir = layout.quarantine().join("alice@example.org");
+        fs::create_dir_all(&sender_dir).unwrap();
+        let subject = "Greetings";
+        let ulid = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        let mut sidecar = MessageSidecar::new(
+            ulid,
+            crate::model::filename::message_filename(subject, ulid),
+            "quarantine",
+            "strict",
+            crate::model::filename::html_filename(subject, ulid),
+            "deadbeef",
+            crate::model::message::HeadersCache::new("Alice", subject),
+        );
+        sidecar.set_rspamd(crate::model::message::RspamdSummary {
+            score: 4.5,
+            symbols: vec!["VIOLATION".into()],
+        });
+        let sidecar_path = sender_dir.join(crate::model::filename::sidecar_filename(subject, ulid));
+        write_atomic(
+            &sidecar_path,
+            serde_yaml::to_string(&sidecar).unwrap().as_bytes(),
+        )
+        .unwrap();
+
+        let output = triage(&env_path, &env, None, None, false).unwrap();
+        assert!(output.contains("alice@example.org"));
+        assert!(output.contains("Greetings"));
+        assert!(output.contains("rspamd=4.5"));
+
+        let json = triage(&env_path, &env, None, None, true).unwrap();
+        let parsed: Vec<TriageEntry> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].address, "alice@example.org");
     }
 
     #[test]
+    fn pin_address_toggles_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let env = EnvConfig::default();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let sender_dir = layout.accepted().join("bob@example.org");
+        fs::create_dir_all(&sender_dir).unwrap();
+        let ulid = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
+        let mut sidecar = MessageSidecar::new(
+            ulid,
+            crate::model::filename::message_filename("Status", ulid),
+            "accepted",
+            "strict",
+            crate::model::filename::html_filename("Status", ulid),
+            "feedface",
+            crate::model::message::HeadersCache::new("Bob", "Status"),
+        );
+        sidecar.set_rspamd(crate::model::message::RspamdSummary {
+            score: 1.0,
+            symbols: vec!["FLAGGED".into()],
+        });
+        let sidecar_path =
+            sender_dir.join(crate::model::filename::sidecar_filename("Status", ulid));
+        write_atomic(
+            &sidecar_path,
+            serde_yaml::to_string(&sidecar).unwrap().as_bytes(),
+        )
+        .unwrap();
+        let result = pin_address(&env_path, &env, "bob@example.org".into(), false).unwrap();
+        assert!(result.contains("pinned bob@example.org"));
+        let updated: MessageSidecar =
+            serde_yaml::from_str(&fs::read_to_string(&sidecar_path).unwrap()).unwrap();
+        assert!(updated.pinned);
+        let result = pin_address(&env_path, &env, "bob@example.org".into(), true).unwrap();
+        assert!(result.contains("unpinned bob@example.org"));
+        let updated: MessageSidecar =
+            serde_yaml::from_str(&fs::read_to_string(&sidecar_path).unwrap()).unwrap();
+        assert!(!updated.pinned);
+    }
+
+    #[test]
+    fn send_draft_queues_message_and_records_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let mut env = EnvConfig::default();
+        env.retry_backoff = vec!["1s".into()];
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let logger = Logger::new(layout.root(), LogLevel::Off).unwrap();
+        let ulid = crate::util::ulid::generate();
+        let draft_path = layout.drafts().join(format!("{ulid}.md"));
+        fs::write(
+            &draft_path,
+            "---\nsubject: Hi\nfrom: Owl <owl@example.org>\nto:\n  - Bob <bob@example.org>\n---\nHello world!\n",
+        )
+        .unwrap();
+        let output = send_draft(&env_path, &env, &logger, &draft_path.to_string_lossy()).unwrap();
+        assert!(output.contains(&ulid));
+        let sidecar_path = layout
+            .outbox()
+            .join(crate::model::filename::outbox_sidecar_filename(&ulid));
+        assert!(sidecar_path.exists());
+        let sidecar: MessageSidecar =
+            serde_yaml::from_str(&fs::read_to_string(sidecar_path).unwrap()).unwrap();
+        assert!(sidecar.outbound.is_some());
+        assert_eq!(sidecar.outbound.unwrap().attempts, 1);
+    }
+
+    #[test]
+    fn backup_and_import_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join("mail/.env");
+        let root = env_path.parent().unwrap();
+        fs::create_dir_all(root).unwrap();
+        let layout = MailLayout::new(root);
+        layout.ensure().unwrap();
+        fs::write(layout.root().join("marker.txt"), b"ok").unwrap();
+        let backup_path = dir.path().join("backup.tar.gz");
+        let output = backup_mail(&env_path, &backup_path).unwrap();
+        assert!(output.contains("backup written"));
+        assert!(backup_path.exists());
+
+        let dest_dir = tempfile::tempdir().unwrap();
+        let dest_env = dest_dir.path().join("mail/.env");
+        fs::create_dir_all(dest_env.parent().unwrap()).unwrap();
+        import_archive(&dest_env, &backup_path).unwrap();
+        assert!(dest_env.parent().unwrap().join("marker.txt").exists());
+    }
+
+    #[test]
+    fn export_sender_writes_tarball() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let env = EnvConfig::default();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let sender_dir = layout.accepted().join("carol@example.org");
+        fs::create_dir_all(&sender_dir).unwrap();
+        let subject = "Report";
+        let ulid = "01ARZ3NDEKTSV4RRFFQ69G5FC0";
+        let mut sidecar = MessageSidecar::new(
+            ulid,
+            crate::model::filename::message_filename(subject, ulid),
+            "accepted",
+            "strict",
+            crate::model::filename::html_filename(subject, ulid),
+            "cafebabe",
+            crate::model::message::HeadersCache::new("Carol", subject),
+        );
+        sidecar.add_attachment("cafebabe", "report.pdf");
+        let sidecar_path = sender_dir.join(crate::model::filename::sidecar_filename(subject, ulid));
+        write_atomic(
+            &sidecar_path,
+            serde_yaml::to_string(&sidecar).unwrap().as_bytes(),
+        )
+        .unwrap();
+        let attachment_path = layout.attachments("accepted").join("cafebabe__report.pdf");
+        fs::create_dir_all(attachment_path.parent().unwrap()).unwrap();
+        fs::write(&attachment_path, b"pdf").unwrap();
+
+        let export_path = dir.path().join("carol.tar.gz");
+        let output = export_sender(
+            &env_path,
+            &env,
+            "accepted",
+            "carol@example.org",
+            &export_path,
+        )
+        .unwrap();
+        assert!(output.contains("exported carol@example.org"));
+        assert!(export_path.exists());
+
+        let file = fs::File::open(&export_path).unwrap();
+        let mut archive = Archive::new(GzDecoder::new(file));
+        let mut entries = Vec::new();
+        archive
+            .entries()
+            .unwrap()
+            .for_each(|entry| entries.push(entry.unwrap().path().unwrap().into_owned()));
+        assert!(entries.iter().any(|p| p.ends_with(Path::new(
+            "accepted/carol@example.org/.Report (01ARZ3NDEKTSV4RRFFQ69G5FC0).yml"
+        ))));
+        assert!(
+            entries
+                .iter()
+                .any(|p| p.ends_with(Path::new("accepted/attachments/cafebabe__report.pdf")))
+        );
+    }
+
+    #[test]
+    fn logs_command_formats_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let logger = Logger::new(root, LogLevel::Minimal).unwrap();
+        logger
+            .log(LogLevel::Minimal, "outbox.retry", Some("attempt=1"))
+            .unwrap();
+        let human = logs(root, LogLevel::Minimal, LogAction::Show, false).unwrap();
+        assert!(human.contains("outbox.retry"));
+        let json = logs(root, LogLevel::Minimal, LogAction::Tail, true).unwrap();
+        let parsed: Vec<logging::LogEntry> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].level, "minimal");
+        let disabled = logs(root, LogLevel::Off, LogAction::Show, false).unwrap();
+        assert_eq!(disabled, "logging disabled");
+        let disabled_json = logs(root, LogLevel::Off, LogAction::Tail, true).unwrap();
+        assert_eq!(disabled_json, "[]");
+    }
+
+    #[test]
+    #[serial]
+    fn import_maildir_consumes_messages() {
+        with_fake_render_env(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let maildir = dir.path().join("maildir");
+            fs::create_dir_all(maildir.join("cur")).unwrap();
+            fs::write(
+                maildir.join("cur/msg1"),
+                sample_email("Alice <alice@example.org>", "Status"),
+            )
+            .unwrap();
+
+            let root = dir.path().join("mail");
+            fs::create_dir_all(&root).unwrap();
+            let env_path = root.join(".env");
+            fs::write(&env_path, EnvConfig::default().to_env_string()).unwrap();
+
+            let output = import_archive(&env_path, &maildir).unwrap();
+            assert!(output.contains("1 messages"));
+
+            let layout = MailLayout::new(&root);
+            let sender_dir = layout.quarantine().join("alice@example.org");
+            let entries: Vec<_> = fs::read_dir(&sender_dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect();
+            assert!(
+                entries
+                    .iter()
+                    .any(|path| path.extension().map(|ext| ext == "eml").unwrap_or(false))
+            );
+            let sidecar_path = entries
+                .iter()
+                .find(|path| path.extension().map(|ext| ext == "yml").unwrap_or(false))
+                .unwrap();
+            let sidecar: MessageSidecar =
+                serde_yaml::from_str(&fs::read_to_string(sidecar_path).unwrap()).unwrap();
+            assert_eq!(sidecar.status_shadow, "quarantine");
+            assert_eq!(sidecar.headers_cache.subject, "Status");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn import_mbox_consumes_messages() {
+        with_fake_render_env(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("mail");
+            fs::create_dir_all(&root).unwrap();
+            let env_path = root.join(".env");
+            fs::write(&env_path, EnvConfig::default().to_env_string()).unwrap();
+
+            let mbox_path = dir.path().join("import.mbox");
+            let mut mbox = Vec::new();
+            mbox.extend_from_slice(b"From alice@example.org Sat Jan  1 00:00:00 2022\n");
+            mbox.extend_from_slice(&sample_email("Alice <alice@example.org>", "Hello"));
+            mbox.push(b'\n');
+            mbox.extend_from_slice(b"From bob@example.org Sat Jan  1 01:00:00 2022\n");
+            mbox.extend_from_slice(&sample_email("Bob <bob@example.org>", "Update"));
+            fs::write(&mbox_path, &mbox).unwrap();
+
+            let output = import_archive(&env_path, &mbox_path).unwrap();
+            assert!(output.contains("2 messages"));
+
+            let layout = MailLayout::new(&root);
+            assert!(layout.quarantine().join("alice@example.org").exists());
+            assert!(layout.quarantine().join("bob@example.org").exists());
+        });
+    }
+
+    fn sample_email(from: &str, subject: &str) -> Vec<u8> {
+        format!("From: {from}\r\nTo: you@example.org\r\nSubject: {subject}\r\n\r\nBody\r\n")
+            .into_bytes()
+    }
+
+    fn with_fake_render_env<T>(f: impl FnOnce() -> T) -> T {
+        let dir = tempfile::tempdir().unwrap();
+        write_exec(&dir, "sanitize-html", "#!/bin/sh\n/bin/cat\n");
+        write_exec(&dir, "lynx", "#!/bin/sh\n/bin/cat\n");
+        let original = std::env::var_os("PATH");
+        let mut new_path = std::ffi::OsString::from(dir.path());
+        if let Some(ref orig) = original {
+            new_path.push(":");
+            new_path.push(orig);
+        }
+        unsafe { std::env::set_var("PATH", &new_path) };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        match original {
+            Some(orig) => unsafe { std::env::set_var("PATH", orig) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+        result.expect("render env callback panicked")
+    }
+
+    fn write_exec(dir: &tempfile::TempDir, name: &str, body: &str) {
+        let path = dir.path().join(name);
+        fs::write(&path, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&path).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&path, perms).unwrap();
+        }
+    }
+
+    fn with_fake_ops_env<T>(f: impl FnOnce() -> T) -> T {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["certbot", "rspamadm", "systemctl", "chronyc"] {
+            write_exec(&dir, name, "#!/bin/sh\nexit 0\n");
+        }
+        let original = std::env::var_os("PATH");
+        let mut new_path = std::ffi::OsString::from(dir.path());
+        if let Some(ref orig) = original {
+            new_path.push(":");
+            new_path.push(orig);
+        }
+        unsafe { std::env::set_var("PATH", &new_path) };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        match original {
+            Some(orig) => unsafe { std::env::set_var("PATH", orig) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+        result.expect("ops env callback panicked")
+    }
+
+    #[test]
+    #[serial]
     fn install_sets_up_mail_root_and_env() {
         let dir = tempfile::tempdir().unwrap();
         let env_path = dir.path().join(".env");
@@ -413,13 +1320,23 @@ mod tests {
             json: false,
         };
         let env = EnvConfig::default();
-        let output = run(cli.clone(), env.clone()).unwrap();
+        let output = with_fake_ops_env(|| run(cli.clone(), env.clone()).unwrap());
         assert!(output.contains("installed"));
         assert!(dir.path().join("quarantine").exists());
+        let dkim_dir = dir.path().join("dkim");
+        assert!(dkim_dir.exists());
+        let selector = env.dkim_selector.clone();
+        assert!(dkim_dir.join(format!("{selector}.private")).exists());
+        assert!(dkim_dir.join(format!("{selector}.public")).exists());
+        assert!(dkim_dir.join(format!("{selector}.dns")).exists());
+        let config_root = dir.path().join("config");
+        assert!(config_root.join("postfix/main.cf").exists());
+        assert!(config_root.join("rspamd/local.d/rate_limit.conf").exists());
+        assert!(config_root.join("letsencrypt/README.txt").exists());
         let env_contents = std::fs::read_to_string(&env_path).unwrap();
         assert!(env_contents.contains("dmarc_policy=none"));
         std::fs::write(&env_path, "logging=off\n").unwrap();
-        let again = run(cli, env).unwrap();
+        let again = with_fake_ops_env(|| run(cli, env.clone()).unwrap());
         assert!(again.contains("installed"));
         let env_contents_after = std::fs::read_to_string(&env_path).unwrap();
         assert_eq!(env_contents_after, "logging=off\n");

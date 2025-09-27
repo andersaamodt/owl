@@ -45,6 +45,14 @@ impl MailLayout {
         self.root.join("sent")
     }
 
+    pub fn logs_dir(&self) -> PathBuf {
+        self.root.join("logs")
+    }
+
+    pub fn log_file(&self) -> PathBuf {
+        self.logs_dir().join("owl.log")
+    }
+
     pub fn attachments(&self, list: &str) -> PathBuf {
         self.root.join(list).join("attachments")
     }
@@ -55,10 +63,26 @@ impl MailLayout {
         for list in ["accepted", "spam", "banned"] {
             self.ensure_list(list)?;
         }
-        for leaf in ["drafts", "outbox", "sent", "logs"] {
+        for leaf in ["drafts", "outbox", "sent", "logs", "dkim"] {
             fs::create_dir_all(self.root.join(leaf))?;
         }
         Ok(())
+    }
+
+    pub fn dkim_dir(&self) -> PathBuf {
+        self.root.join("dkim")
+    }
+
+    pub fn dkim_private_key(&self, selector: &str) -> PathBuf {
+        self.dkim_dir().join(format!("{selector}.private"))
+    }
+
+    pub fn dkim_public_key(&self, selector: &str) -> PathBuf {
+        self.dkim_dir().join(format!("{selector}.public"))
+    }
+
+    pub fn dkim_dns_record(&self, selector: &str) -> PathBuf {
+        self.dkim_dir().join(format!("{selector}.dns"))
     }
 
     fn ensure_list(&self, list: &str) -> Result<()> {
@@ -108,6 +132,21 @@ mod tests {
         assert_eq!(layout.drafts(), Path::new("/tmp/mail/drafts"));
         assert_eq!(layout.outbox(), Path::new("/tmp/mail/outbox"));
         assert_eq!(layout.sent(), Path::new("/tmp/mail/sent"));
+        assert_eq!(layout.logs_dir(), Path::new("/tmp/mail/logs"));
+        assert_eq!(layout.log_file(), Path::new("/tmp/mail/logs/owl.log"));
+        assert_eq!(layout.dkim_dir(), Path::new("/tmp/mail/dkim"));
+        assert_eq!(
+            layout.dkim_private_key("mail"),
+            Path::new("/tmp/mail/dkim/mail.private")
+        );
+        assert_eq!(
+            layout.dkim_public_key("mail"),
+            Path::new("/tmp/mail/dkim/mail.public")
+        );
+        assert_eq!(
+            layout.dkim_dns_record("mail"),
+            Path::new("/tmp/mail/dkim/mail.dns")
+        );
         assert_eq!(layout.root(), Path::new("/tmp/mail"));
     }
 
@@ -125,6 +164,7 @@ mod tests {
             "outbox",
             "sent",
             "logs",
+            "dkim",
         ] {
             assert!(dir.path().join(leaf).exists(), "{leaf} missing");
         }

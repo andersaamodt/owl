@@ -1,6 +1,11 @@
 pub mod cli;
 pub mod envcfg;
 
+pub mod daemon {
+    pub mod service;
+    pub mod watch;
+}
+
 pub mod model {
     pub mod address;
     pub mod filename;
@@ -29,12 +34,17 @@ pub mod ruleset {
 }
 
 pub mod util {
+    pub mod dkim;
     pub mod idna;
     pub mod logging;
     pub mod regex;
     pub mod size;
     pub mod time;
     pub mod ulid;
+}
+
+pub mod ops {
+    pub mod install;
 }
 
 pub use envcfg::EnvConfig;

@@ -18,12 +18,18 @@ pub struct MessageSidecar {
     pub headers_cache: HeadersCache,
     #[serde(default)]
     pub history: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rspamd: Option<RspamdSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outbound: Option<OutboundState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RenderInfo {
     pub mode: String,
     pub html: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plain: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -67,10 +73,13 @@ impl MessageSidecar {
             render: RenderInfo {
                 mode: mode.into(),
                 html: html.into(),
+                plain: None,
             },
             attachments: Vec::new(),
             headers_cache: headers,
             history: Vec::new(),
+            rspamd: None,
+            outbound: None,
         }
     }
 
@@ -79,6 +88,21 @@ impl MessageSidecar {
             sha256: sha256.into(),
             name: name.into(),
         });
+    }
+
+    pub fn set_plain_render(&mut self, plain: impl Into<String>) {
+        self.render.plain = Some(plain.into());
+    }
+
+    pub fn set_rspamd(&mut self, summary: RspamdSummary) {
+        self.rspamd = Some(summary);
+    }
+
+    pub fn outbound_state_mut(&mut self) -> &mut OutboundState {
+        if self.outbound.is_none() {
+            self.outbound = Some(OutboundState::default());
+        }
+        self.outbound.as_mut().expect("outbound state to exist")
     }
 
     pub fn mark_read(&mut self) {
@@ -103,6 +127,41 @@ impl HeadersCache {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct RspamdSummary {
+    pub score: f32,
+    #[serde(default)]
+    pub symbols: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OutboundState {
+    pub status: OutboundStatus,
+    pub attempts: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_attempt_at: Option<String>,
+}
+
+impl Default for OutboundState {
+    fn default() -> Self {
+        Self {
+            status: OutboundStatus::Pending,
+            attempts: 0,
+            last_error: None,
+            next_attempt_at: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum OutboundStatus {
+    Pending,
+    Sent,
+    Failed,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,9 +180,15 @@ mod tests {
         );
         sidecar.add_attachment("aa", "file.pdf");
         sidecar.mark_read();
+        sidecar.set_plain_render(".Subject.txt");
+        let outbound = sidecar.outbound_state_mut();
+        outbound.attempts = 2;
+        outbound.status = OutboundStatus::Sent;
         let yaml = serde_yaml::to_string(&sidecar).unwrap();
         let parsed: MessageSidecar = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed.attachments.len(), 1);
         assert!(parsed.read);
+        assert_eq!(parsed.render.plain.as_deref(), Some(".Subject.txt"));
+        assert_eq!(parsed.outbound.unwrap().attempts, 2);
     }
 }

@@ -16,6 +16,16 @@ pub struct EnvConfig {
     pub render_mode: String,
     pub load_external_per_message: bool,
     pub retry_backoff: Vec<String>,
+    #[serde(default)]
+    pub smtp_host: Option<String>,
+    #[serde(default)]
+    pub smtp_port: u16,
+    #[serde(default)]
+    pub smtp_username: Option<String>,
+    #[serde(default)]
+    pub smtp_password: Option<String>,
+    #[serde(default)]
+    pub smtp_starttls: bool,
 }
 
 impl Default for EnvConfig {
@@ -32,6 +42,11 @@ impl Default for EnvConfig {
             render_mode: "strict".into(),
             load_external_per_message: true,
             retry_backoff: vec!["1m".into(), "5m".into(), "15m".into(), "1h".into()],
+            smtp_host: Some("127.0.0.1".into()),
+            smtp_port: 25,
+            smtp_username: None,
+            smtp_password: None,
+            smtp_starttls: true,
         }
     }
 }
@@ -106,6 +121,17 @@ impl EnvConfig {
                 })
                 .filter(|v: &Vec<String>| !v.is_empty())
                 .unwrap_or_else(|| Self::default().retry_backoff),
+            smtp_host: map.get("smtp_host").cloned(),
+            smtp_port: map
+                .get("smtp_port")
+                .and_then(|v| v.parse::<u16>().ok())
+                .unwrap_or_else(|| Self::default().smtp_port),
+            smtp_username: map.get("smtp_username").cloned(),
+            smtp_password: map.get("smtp_password").cloned(),
+            smtp_starttls: map
+                .get("smtp_starttls")
+                .map(|v| matches!(v.as_str(), "true" | "1" | "yes"))
+                .unwrap_or_else(|| Self::default().smtp_starttls),
         })
     }
 
@@ -122,7 +148,10 @@ impl EnvConfig {
                 "logging={}\n",
                 "render_mode={}\n",
                 "load_external_per_message={}\n",
-                "retry_backoff={}\n"
+                "retry_backoff={}\n",
+                "smtp_host={}\n",
+                "smtp_port={}\n",
+                "smtp_starttls={}\n"
             ),
             self.dmarc_policy,
             self.dkim_selector,
@@ -134,7 +163,10 @@ impl EnvConfig {
             self.logging,
             self.render_mode,
             bool_to_env(self.load_external_per_message),
-            self.retry_backoff.join(",")
+            self.retry_backoff.join(","),
+            self.smtp_host.clone().unwrap_or_else(|| "127.0.0.1".into()),
+            self.smtp_port,
+            bool_to_env(self.smtp_starttls)
         )
     }
 }
@@ -151,6 +183,8 @@ mod tests {
     fn parse_defaults() {
         let cfg = EnvConfig::default();
         assert_eq!(cfg.retry_backoff.len(), 4);
+        assert_eq!(cfg.smtp_port, 25);
+        assert!(cfg.smtp_starttls);
     }
 
     #[test]
@@ -163,7 +197,7 @@ mod tests {
     #[test]
     fn parse_all_fields() {
         let cfg = EnvConfig::from_str(
-            "dmarc_policy=quarantine\ndkim_selector=owl\nletsencrypt_method=dns\nmax_size_quarantine=10M\nmax_size_approved_default=20M\ncontacts_dir=/tmp/contacts\nlogging=verbose_full\nrender_mode=moderate\nload_external_per_message=false\nretry_backoff=1m\n",
+            "dmarc_policy=quarantine\ndkim_selector=owl\nletsencrypt_method=dns\nmax_size_quarantine=10M\nmax_size_approved_default=20M\ncontacts_dir=/tmp/contacts\nlogging=verbose_full\nrender_mode=moderate\nload_external_per_message=false\nretry_backoff=1m\nsmtp_host=smtp.example.org\nsmtp_port=2525\nsmtp_username=alice\nsmtp_password=secret\nsmtp_starttls=false\n",
         )
         .unwrap();
         assert_eq!(cfg.dmarc_policy, "quarantine");
@@ -176,6 +210,11 @@ mod tests {
         assert_eq!(cfg.render_mode, "moderate");
         assert!(!cfg.load_external_per_message);
         assert_eq!(cfg.retry_backoff, vec!["1m"]);
+        assert_eq!(cfg.smtp_host.as_deref(), Some("smtp.example.org"));
+        assert_eq!(cfg.smtp_port, 2525);
+        assert_eq!(cfg.smtp_username.as_deref(), Some("alice"));
+        assert_eq!(cfg.smtp_password.as_deref(), Some("secret"));
+        assert!(!cfg.smtp_starttls);
     }
 
     #[test]
@@ -198,6 +237,7 @@ mod tests {
         cfg.keep_plus_tags = true;
         let rendered = cfg.to_env_string();
         assert!(rendered.contains("keep_plus_tags=true"));
-        assert!(rendered.ends_with("retry_backoff=1m,5m,15m,1h\n"));
+        assert!(rendered.contains("smtp_host="));
+        assert!(rendered.contains("smtp_port="));
     }
 }
