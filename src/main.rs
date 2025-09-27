@@ -33,8 +33,8 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use serial_test::serial;
+    use tempfile::tempdir;
 
     fn with_fake_ops_env<T>(f: impl FnOnce() -> T) -> T {
         let dir = tempdir().unwrap();
