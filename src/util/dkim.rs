@@ -47,9 +47,7 @@ pub fn ensure_ed25519_keypair(dir: &Path, selector: &str) -> Result<DkimMaterial
         .to_string();
     let dns_value = format!("v=DKIM1; k=ed25519; p={public_key}");
 
-    if generated {
-        write_atomic(&dns, dns_value.as_bytes())?;
-    } else if !dns.exists() {
+    if generated || !dns.exists() {
         write_atomic(&dns, dns_value.as_bytes())?;
     } else {
         let existing = fs::read_to_string(&dns)
@@ -65,7 +63,7 @@ pub fn ensure_ed25519_keypair(dir: &Path, selector: &str) -> Result<DkimMaterial
         private_key_path: private,
         public_key_path: public,
         dns_record_path: dns,
-        public_key: public_key,
+        public_key,
         selector: selector.to_string(),
     })
 }

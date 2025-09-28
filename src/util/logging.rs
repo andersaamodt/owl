@@ -186,7 +186,7 @@ impl LogEntry {
     }
 }
 
-pub fn tail<'a>(entries: &'a [LogEntry], max: usize) -> &'a [LogEntry] {
+pub fn tail(entries: &[LogEntry], max: usize) -> &[LogEntry] {
     if entries.len() <= max {
         entries
     } else {

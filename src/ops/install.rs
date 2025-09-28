@@ -169,13 +169,12 @@ fn run_certbot(layout: &MailLayout, env: &EnvConfig, logger: &Logger) -> Result<
         .stderr_capture()
         .stdout_capture()
         .run()
-        .map_err(|err| {
+        .inspect_err(|err| {
             let _ = logger.log(
                 LogLevel::Minimal,
                 "install.ops.certbot.error",
                 Some(&err.to_string()),
             );
-            err
         })?;
     logger.log(
         LogLevel::Minimal,
@@ -190,37 +189,34 @@ fn enable_rspamd(logger: &Logger) -> Result<()> {
         .stderr_capture()
         .stdout_capture()
         .run()
-        .map_err(|err| {
+        .inspect_err(|err| {
             let _ = logger.log(
                 LogLevel::Minimal,
                 "install.ops.rspamd.error",
                 Some(&err.to_string()),
             );
-            err
         })?;
     cmd("systemctl", ["enable", "rspamd"])
         .stderr_capture()
         .stdout_capture()
         .run()
-        .map_err(|err| {
+        .inspect_err(|err| {
             let _ = logger.log(
                 LogLevel::Minimal,
                 "install.ops.rspamd.enable_error",
                 Some(&err.to_string()),
             );
-            err
         })?;
     cmd("systemctl", ["restart", "rspamd"])
         .stderr_capture()
         .stdout_capture()
         .run()
-        .map_err(|err| {
+        .inspect_err(|err| {
             let _ = logger.log(
                 LogLevel::Minimal,
                 "install.ops.rspamd.restart_error",
                 Some(&err.to_string()),
             );
-            err
         })?;
     logger.log(LogLevel::Minimal, "install.ops.rspamd", None)?;
     Ok(())
@@ -231,13 +227,12 @@ fn reload_postfix(logger: &Logger) -> Result<()> {
         .stderr_capture()
         .stdout_capture()
         .run()
-        .map_err(|err| {
+        .inspect_err(|err| {
             let _ = logger.log(
                 LogLevel::Minimal,
                 "install.ops.postfix.error",
                 Some(&err.to_string()),
             );
-            err
         })?;
     logger.log(LogLevel::Minimal, "install.ops.postfix", None)?;
     Ok(())
@@ -248,13 +243,12 @@ fn sync_chrony(logger: &Logger) -> Result<()> {
         .stderr_capture()
         .stdout_capture()
         .run()
-        .map_err(|err| {
+        .inspect_err(|err| {
             let _ = logger.log(
                 LogLevel::Minimal,
                 "install.ops.chrony.error",
                 Some(&err.to_string()),
             );
-            err
         })?;
     logger.log(LogLevel::Minimal, "install.ops.chrony", None)?;
     Ok(())

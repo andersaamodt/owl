@@ -20,7 +20,7 @@ pub fn parse_delete_after(value: &str) -> Option<Duration> {
 }
 
 pub fn retention_due(last_activity: OffsetDateTime, policy: &str, now: OffsetDateTime) -> bool {
-    parse_delete_after(policy).map_or(false, |duration| last_activity + duration < now)
+    parse_delete_after(policy).is_some_and(|duration| last_activity + duration < now)
 }
 
 pub fn parse_interval(value: &str) -> Option<Duration> {

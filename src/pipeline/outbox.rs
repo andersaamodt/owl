@@ -182,13 +182,12 @@ impl OutboxPipeline {
                 sidecar.outbound = Some(outbound);
                 continue;
             }
-            if let Some(next) = &outbound.next_attempt_at {
-                if let Ok(next_time) = OffsetDateTime::parse(next, &Rfc3339) {
-                    if next_time > OffsetDateTime::now_utc() {
-                        sidecar.outbound = Some(outbound);
-                        continue;
-                    }
-                }
+            if let Some(next) = &outbound.next_attempt_at
+                && let Ok(next_time) = OffsetDateTime::parse(next, &Rfc3339)
+                && next_time > OffsetDateTime::now_utc()
+            {
+                sidecar.outbound = Some(outbound);
+                continue;
             }
             let message_path = outbox_dir.join(&sidecar.filename);
             if !message_path.exists() {

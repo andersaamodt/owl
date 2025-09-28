@@ -217,8 +217,10 @@ struct EmailAttachment {
 
 fn parse_email(body: &[u8]) -> Result<ParsedEmail> {
     let parsed = parse_mail(body).map_err(|err| anyhow!(err.to_string()))?;
-    let mut result = ParsedEmail::default();
-    result.rspamd = extract_rspamd(&parsed);
+    let mut result = ParsedEmail {
+        rspamd: extract_rspamd(&parsed),
+        ..ParsedEmail::default()
+    };
     collect_parts(&parsed, &mut result)?;
     Ok(result)
 }
@@ -243,10 +245,10 @@ fn collect_parts(part: &ParsedMail, acc: &mut ParsedEmail) -> Result<()> {
 
     let disposition = part.get_content_disposition();
     let mut filename = disposition.params.get("filename").cloned();
-    if filename.is_none() {
-        if let Some(name) = part.ctype.params.get("name") {
-            filename = Some(name.clone());
-        }
+    if filename.is_none()
+        && let Some(name) = part.ctype.params.get("name")
+    {
+        filename = Some(name.clone());
     }
     if let Some(name) = filename {
         let is_text = ctype.starts_with("text/");
@@ -277,7 +279,7 @@ fn plaintext_to_html(text: &str) -> String {
             '"' => escaped.push_str("&quot;"),
             '\'' => escaped.push_str("&#39;"),
             '\r' => {}
-            '\n' => escaped.push_str("\n"),
+            '\n' => escaped.push('\n'),
             _ => escaped.push(ch),
         }
     }
@@ -490,8 +492,10 @@ mod tests {
         with_fake_sanitizer("#!/bin/sh\ncat\n", || {
             let dir = tempfile::tempdir().unwrap();
             let layout = MailLayout::new(dir.path());
-            let mut env = EnvConfig::default();
-            env.max_size_quarantine = "16".into();
+            let env = EnvConfig {
+                max_size_quarantine: "16".into(),
+                ..EnvConfig::default()
+            };
             let pipeline = InboundPipeline::new(layout, env).unwrap();
             let sender = Address::parse("dave@example.org", false).unwrap();
             let mut body = plain_message(&"A".repeat(32));
@@ -509,8 +513,10 @@ mod tests {
         with_fake_sanitizer("#!/bin/sh\ncat\n", || {
             let dir = tempfile::tempdir().unwrap();
             let layout = MailLayout::new(dir.path());
-            let mut env = EnvConfig::default();
-            env.max_size_approved_default = "32".into();
+            let env = EnvConfig {
+                max_size_approved_default: "32".into(),
+                ..EnvConfig::default()
+            };
             let pipeline = InboundPipeline::new(layout, env).unwrap();
             let sender = Address::parse("erin@example.org", false).unwrap();
             let mut body = plain_message(&"B".repeat(64));

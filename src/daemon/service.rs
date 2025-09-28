@@ -158,8 +158,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
-        let mut env = EnvConfig::default();
-        env.retry_backoff = vec!["1s".into()];
+        let env = EnvConfig {
+            retry_backoff: vec!["1s".into()],
+            ..EnvConfig::default()
+        };
         let logger = Logger::new(layout.root(), LogLevel::Off).unwrap();
         let transport: Arc<dyn MailTransport> = Arc::new(SucceedingTransport);
         let pipeline = Arc::new(OutboxPipeline::with_transport(

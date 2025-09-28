@@ -551,8 +551,9 @@ fn pin_address(env_path: &Path, env: &EnvConfig, address: String, unset: bool) -
         for path in sidecar_files(&sender_dir)? {
             let yaml = fs::read_to_string(&path)?;
             let mut sidecar: MessageSidecar = serde_yaml::from_str(&yaml)?;
-            if sidecar.pinned != !unset {
-                sidecar.pinned = !unset;
+            let desired_pin = !unset;
+            if sidecar.pinned != desired_pin {
+                sidecar.pinned = desired_pin;
                 let rendered = serde_yaml::to_string(&sidecar)?;
                 write_atomic(&path, rendered.as_bytes())?;
                 updated += 1;
@@ -669,10 +670,10 @@ fn resolve_draft_path(layout: &MailLayout, draft: &str) -> Result<PathBuf> {
 
 fn backup_mail(env_path: &Path, target: &Path) -> Result<String> {
     let root = mail_root(env_path);
-    if let Some(parent) = target.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = target.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
     }
     let file = File::create(target).with_context(|| format!("creating {}", target.display()))?;
     let encoder = GzEncoder::new(file, Compression::default());
@@ -699,10 +700,10 @@ fn export_sender(
     if !sender_dir.exists() {
         bail!("sender {canonical} not found in {list_name}");
     }
-    if let Some(parent) = target.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = target.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
     }
     let file = File::create(target).with_context(|| format!("creating {}", target.display()))?;
     let encoder = GzEncoder::new(file, Compression::default());
@@ -902,7 +903,7 @@ fn first_mailbox(addrs: &[MailAddr]) -> Option<String> {
 }
 
 fn resolve_env_path(raw: &str) -> Result<PathBuf> {
-    resolve_env_path_with_home(raw, || home_dir())
+    resolve_env_path_with_home(raw, home_dir)
 }
 
 fn resolve_env_path_with_home<F>(raw: &str, home: F) -> Result<PathBuf>
@@ -1057,8 +1058,10 @@ mod tests {
     fn send_draft_queues_message_and_records_retry() {
         let dir = tempfile::tempdir().unwrap();
         let env_path = dir.path().join(".env");
-        let mut env = EnvConfig::default();
-        env.retry_backoff = vec!["1s".into()];
+        let env = EnvConfig {
+            retry_backoff: vec!["1s".into()],
+            ..EnvConfig::default()
+        };
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
         let logger = Logger::new(layout.root(), LogLevel::Off).unwrap();

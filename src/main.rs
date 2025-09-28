@@ -1,5 +1,9 @@
+#[cfg(not(test))]
+use clap::Parser;
+#[cfg(test)]
+use owl::cli::Commands;
 use owl::{
-    cli::{Commands, OwlCli, run},
+    cli::{OwlCli, run},
     envcfg::EnvConfig,
 };
 use std::path::Path;
@@ -33,8 +37,8 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use serial_test::serial;
+    use tempfile::tempdir;
 
     fn with_fake_ops_env<T>(f: impl FnOnce() -> T) -> T {
         let dir = tempdir().unwrap();

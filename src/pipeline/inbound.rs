@@ -43,7 +43,7 @@ mod tests {
     fn banned_wins() {
         let sender = Address::parse("foo@bar.com", false).unwrap();
         let mut rules = LoadedRules::default();
-        rules.banned.rules = RuleSet::from_str("@bar.com").unwrap();
+        rules.banned.rules = RuleSet::parse("@bar.com").unwrap();
         let route = determine_route(&sender, &rules, &EnvConfig::default()).unwrap();
         assert_eq!(route, Route::Banned);
     }
@@ -52,7 +52,7 @@ mod tests {
     fn list_status_overrides() {
         let sender = Address::parse("foo@example.com", false).unwrap();
         let mut rules = LoadedRules::default();
-        rules.accepted.rules = RuleSet::from_str("@example.com").unwrap();
+        rules.accepted.rules = RuleSet::parse("@example.com").unwrap();
         rules.accepted.settings.list_status = "banned".into();
         let route = determine_route(&sender, &rules, &EnvConfig::default()).unwrap();
         assert_eq!(route, Route::Banned);
@@ -62,7 +62,7 @@ mod tests {
     fn spam_branch_maps_status() {
         let sender = Address::parse("foo@spam.test", false).unwrap();
         let mut rules = LoadedRules::default();
-        rules.spam.rules = RuleSet::from_str("@spam.test").unwrap();
+        rules.spam.rules = RuleSet::parse("@spam.test").unwrap();
         let spam_route = determine_route(&sender, &rules, &EnvConfig::default()).unwrap();
         assert_eq!(spam_route, Route::Spam);
         rules.spam.settings.list_status = "accepted".into();
@@ -82,7 +82,7 @@ mod tests {
     fn invalid_status_errors() {
         let sender = Address::parse("foo@example.com", false).unwrap();
         let mut rules = LoadedRules::default();
-        rules.accepted.rules = RuleSet::from_str("@example.com").unwrap();
+        rules.accepted.rules = RuleSet::parse("@example.com").unwrap();
         rules.accepted.settings.list_status = "unknown".into();
         let err = determine_route(&sender, &rules, &EnvConfig::default()).unwrap_err();
         assert!(err.to_string().contains("unknown list_status"));
