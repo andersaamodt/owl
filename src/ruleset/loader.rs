@@ -34,7 +34,7 @@ impl RulesetLoader {
         let path = dir.join(".rules");
         if path.exists() {
             let data = fs::read_to_string(path)?;
-            RuleSet::from_str(&data)
+            RuleSet::parse(&data)
         } else {
             Ok(RuleSet::default())
         }
@@ -52,13 +52,15 @@ impl RulesetLoader {
 }
 
 fn default_settings_for(list: &str) -> ListSettings {
-    let mut settings = ListSettings::default();
-    settings.list_status = match list {
+    let list_status = match list {
         "spam" => "rejected".into(),
         "banned" => "banned".into(),
         _ => "accepted".into(),
     };
-    settings
+    ListSettings {
+        list_status,
+        ..ListSettings::default()
+    }
 }
 
 #[derive(Debug, Clone, Default)]

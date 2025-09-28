@@ -551,8 +551,9 @@ fn pin_address(env_path: &Path, env: &EnvConfig, address: String, unset: bool) -
         for path in sidecar_files(&sender_dir)? {
             let yaml = fs::read_to_string(&path)?;
             let mut sidecar: MessageSidecar = serde_yaml::from_str(&yaml)?;
-            if sidecar.pinned != !unset {
-                sidecar.pinned = !unset;
+            let desired_pin = !unset;
+            if sidecar.pinned != desired_pin {
+                sidecar.pinned = desired_pin;
                 let rendered = serde_yaml::to_string(&sidecar)?;
                 write_atomic(&path, rendered.as_bytes())?;
                 updated += 1;
@@ -669,10 +670,10 @@ fn resolve_draft_path(layout: &MailLayout, draft: &str) -> Result<PathBuf> {
 
 fn backup_mail(env_path: &Path, target: &Path) -> Result<String> {
     let root = mail_root(env_path);
-    if let Some(parent) = target.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = target.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
     }
     let file = File::create(target).with_context(|| format!("creating {}", target.display()))?;
     let encoder = GzEncoder::new(file, Compression::default());
@@ -699,10 +700,10 @@ fn export_sender(
     if !sender_dir.exists() {
         bail!("sender {canonical} not found in {list_name}");
     }
-    if let Some(parent) = target.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = target.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
     }
     let file = File::create(target).with_context(|| format!("creating {}", target.display()))?;
     let encoder = GzEncoder::new(file, Compression::default());
@@ -902,7 +903,7 @@ fn first_mailbox(addrs: &[MailAddr]) -> Option<String> {
 }
 
 fn resolve_env_path(raw: &str) -> Result<PathBuf> {
-    resolve_env_path_with_home(raw, || home_dir())
+    resolve_env_path_with_home(raw, home_dir)
 }
 
 fn resolve_env_path_with_home<F>(raw: &str, home: F) -> Result<PathBuf>
@@ -1057,8 +1058,10 @@ mod tests {
     fn send_draft_queues_message_and_records_retry() {
         let dir = tempfile::tempdir().unwrap();
         let env_path = dir.path().join(".env");
-        let mut env = EnvConfig::default();
-        env.retry_backoff = vec!["1s".into()];
+        let env = EnvConfig {
+            retry_backoff: vec!["1s".into()],
+            ..EnvConfig::default()
+        };
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
         let logger = Logger::new(layout.root(), LogLevel::Off).unwrap();
@@ -1340,6 +1343,105 @@ mod tests {
         assert!(again.contains("installed"));
         let env_contents_after = std::fs::read_to_string(&env_path).unwrap();
         assert_eq!(env_contents_after, "logging=off\n");
+    }
+
+    #[test]
+    #[serial]
+    fn install_skips_existing_env_logs_message() {
+        with_fake_ops_env(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let env_path = dir.path().join(".env");
+            let env = EnvConfig {
+                logging: "verbose_sanitized".into(),
+                ..EnvConfig::default()
+            };
+            fs::write(&env_path, env.to_env_string()).unwrap();
+            let cli = OwlCli {
+                env: env_path.to_string_lossy().into(),
+                command: Some(Commands::Install),
+                json: false,
+            };
+            run(cli, env.clone()).unwrap();
+            let log_path = MailLayout::new(dir.path()).log_file();
+            let entries = Logger::load_entries(&log_path).unwrap();
+            assert!(
+                entries
+                    .iter()
+                    .any(|entry| entry.message == "install.env.skipped")
+            );
+        });
+    }
+
+    #[test]
+    fn run_defaults_to_triage_when_command_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        fs::write(&env_path, EnvConfig::default().to_env_string()).unwrap();
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: None,
+            json: false,
+        };
+        let output = run(cli, EnvConfig::default()).unwrap();
+        assert_eq!(output, "no messages matched");
+    }
+
+    #[test]
+    #[serial]
+    fn restart_reports_errors_for_each_service() {
+        fn write_failing_exec(dir: &tempfile::TempDir, name: &str) {
+            let path = dir.path().join(name);
+            fs::write(&path, "#!/bin/sh\necho \"$@\" >/dev/null\nexit 1\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = fs::metadata(&path).unwrap().permissions();
+                perms.set_mode(0o755);
+                fs::set_permissions(&path, perms).unwrap();
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        write_failing_exec(&dir, "systemctl");
+        let original = std::env::var_os("PATH");
+        let mut new_path = std::ffi::OsString::from(dir.path());
+        if let Some(ref orig) = original {
+            new_path.push(":");
+            new_path.push(orig);
+        }
+        unsafe { std::env::set_var("PATH", &new_path) };
+
+        let env_path = dir.path().join(".env");
+        fs::write(&env_path, EnvConfig::default().to_env_string()).unwrap();
+        let logger = Logger::new(dir.path(), LogLevel::Minimal).unwrap();
+        let summary = restart(&env_path, RestartTarget::All, &logger).unwrap();
+        assert!(summary.contains("postfix=error"));
+        assert!(summary.contains("owl-daemon=error"));
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.message == "restart.service.error")
+        );
+        match original {
+            Some(path) => unsafe { std::env::set_var("PATH", path) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+    }
+
+    #[test]
+    fn logs_tail_supports_json_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let logger = Logger::new(dir.path(), LogLevel::Minimal).unwrap();
+        logger
+            .log(LogLevel::Minimal, "install", Some("root=/tmp"))
+            .unwrap();
+        logger
+            .log(LogLevel::Minimal, "retry", Some("attempt=2"))
+            .unwrap();
+        let output = logs(dir.path(), LogLevel::Minimal, LogAction::Tail, true).unwrap();
+        assert!(output.starts_with("["));
+        assert!(output.contains("\"retry\""));
     }
 
     #[test]

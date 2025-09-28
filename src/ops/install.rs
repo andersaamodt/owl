@@ -169,13 +169,12 @@ fn run_certbot(layout: &MailLayout, env: &EnvConfig, logger: &Logger) -> Result<
         .stderr_capture()
         .stdout_capture()
         .run()
-        .map_err(|err| {
+        .inspect_err(|err| {
             let _ = logger.log(
                 LogLevel::Minimal,
                 "install.ops.certbot.error",
                 Some(&err.to_string()),
             );
-            err
         })?;
     logger.log(
         LogLevel::Minimal,
@@ -190,37 +189,34 @@ fn enable_rspamd(logger: &Logger) -> Result<()> {
         .stderr_capture()
         .stdout_capture()
         .run()
-        .map_err(|err| {
+        .inspect_err(|err| {
             let _ = logger.log(
                 LogLevel::Minimal,
                 "install.ops.rspamd.error",
                 Some(&err.to_string()),
             );
-            err
         })?;
     cmd("systemctl", ["enable", "rspamd"])
         .stderr_capture()
         .stdout_capture()
         .run()
-        .map_err(|err| {
+        .inspect_err(|err| {
             let _ = logger.log(
                 LogLevel::Minimal,
                 "install.ops.rspamd.enable_error",
                 Some(&err.to_string()),
             );
-            err
         })?;
     cmd("systemctl", ["restart", "rspamd"])
         .stderr_capture()
         .stdout_capture()
         .run()
-        .map_err(|err| {
+        .inspect_err(|err| {
             let _ = logger.log(
                 LogLevel::Minimal,
                 "install.ops.rspamd.restart_error",
                 Some(&err.to_string()),
             );
-            err
         })?;
     logger.log(LogLevel::Minimal, "install.ops.rspamd", None)?;
     Ok(())
@@ -231,13 +227,12 @@ fn reload_postfix(logger: &Logger) -> Result<()> {
         .stderr_capture()
         .stdout_capture()
         .run()
-        .map_err(|err| {
+        .inspect_err(|err| {
             let _ = logger.log(
                 LogLevel::Minimal,
                 "install.ops.postfix.error",
                 Some(&err.to_string()),
             );
-            err
         })?;
     logger.log(LogLevel::Minimal, "install.ops.postfix", None)?;
     Ok(())
@@ -248,13 +243,12 @@ fn sync_chrony(logger: &Logger) -> Result<()> {
         .stderr_capture()
         .stdout_capture()
         .run()
-        .map_err(|err| {
+        .inspect_err(|err| {
             let _ = logger.log(
                 LogLevel::Minimal,
                 "install.ops.chrony.error",
                 Some(&err.to_string()),
             );
-            err
         })?;
     logger.log(LogLevel::Minimal, "install.ops.chrony", None)?;
     Ok(())
@@ -287,7 +281,7 @@ mod tests {
         for name in ["certbot", "rspamadm", "systemctl", "chronyc"] {
             let script_path = bin_dir.join(name);
             let script = format!(
-                "#!/bin/sh\necho \"{name} $@\" >> \"{}\"\n",
+                "#!/bin/sh\necho \"{name} $@\" >> \"{}\"\nexit 0\n",
                 log_path.display()
             );
             std::fs::write(&script_path, script).unwrap();
@@ -332,5 +326,18 @@ mod tests {
         assert!(log.contains("systemctl restart rspamd"));
         assert!(log.contains("systemctl reload postfix"));
         assert!(log.contains("chronyc -a makestep"));
+    }
+
+    #[test]
+    fn create_rate_limit_marker_skips_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let chrony = layout.root().join("logs/chrony-sync.log");
+        std::fs::create_dir_all(chrony.parent().unwrap()).unwrap();
+        std::fs::write(&chrony, "marker").unwrap();
+        create_rate_limit_marker(&layout).unwrap();
+        let contents = std::fs::read_to_string(&chrony).unwrap();
+        assert_eq!(contents, "marker");
     }
 }

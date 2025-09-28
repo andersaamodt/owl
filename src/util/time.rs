@@ -20,7 +20,7 @@ pub fn parse_delete_after(value: &str) -> Option<Duration> {
 }
 
 pub fn retention_due(last_activity: OffsetDateTime, policy: &str, now: OffsetDateTime) -> bool {
-    parse_delete_after(policy).map_or(false, |duration| last_activity + duration < now)
+    parse_delete_after(policy).is_some_and(|duration| last_activity + duration < now)
 }
 
 pub fn parse_interval(value: &str) -> Option<Duration> {
@@ -83,11 +83,23 @@ mod tests {
     }
 
     #[test]
+    fn zero_duration_policies_do_not_force_deletion() {
+        let now = OffsetDateTime::now_utc();
+        assert_eq!(parse_delete_after("0d").unwrap().whole_days(), 0);
+        assert!(!retention_due(now, "0d", now));
+    }
+
+    #[test]
     fn parse_interval_supports_common_units() {
         assert_eq!(parse_interval("10s").unwrap().whole_seconds(), 10);
         assert_eq!(parse_interval("5m").unwrap().whole_minutes(), 5);
         assert_eq!(parse_interval("2h").unwrap().whole_hours(), 2);
         assert_eq!(parse_interval("3d").unwrap().whole_days(), 3);
         assert!(parse_interval("1w").is_none());
+    }
+
+    #[test]
+    fn parse_interval_rejects_empty_values() {
+        assert!(parse_interval("   ").is_none());
     }
 }

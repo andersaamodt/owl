@@ -182,13 +182,12 @@ impl OutboxPipeline {
                 sidecar.outbound = Some(outbound);
                 continue;
             }
-            if let Some(next) = &outbound.next_attempt_at {
-                if let Ok(next_time) = OffsetDateTime::parse(next, &Rfc3339) {
-                    if next_time > OffsetDateTime::now_utc() {
-                        sidecar.outbound = Some(outbound);
-                        continue;
-                    }
-                }
+            if let Some(next) = &outbound.next_attempt_at
+                && let Ok(next_time) = OffsetDateTime::parse(next, &Rfc3339)
+                && next_time > OffsetDateTime::now_utc()
+            {
+                sidecar.outbound = Some(outbound);
+                continue;
             }
             let message_path = outbox_dir.join(&sidecar.filename);
             if !message_path.exists() {
@@ -516,13 +515,50 @@ mod tests {
     use crate::util::logging::{LogLevel, Logger};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    #[test]
-    fn queue_draft_generates_signed_message() {
+    fn test_env() -> (tempfile::TempDir, MailLayout, EnvConfig, Logger) {
         let dir = tempfile::tempdir().unwrap();
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
-        let env = EnvConfig::default();
+        let env = EnvConfig {
+            retry_backoff: vec!["1s".into(), "invalid".into(), "2m".into()],
+            ..EnvConfig::default()
+        };
         let logger = Logger::new(layout.root(), LogLevel::Off).unwrap();
+        (dir, layout, env, logger)
+    }
+
+    #[test]
+    fn parse_retry_schedule_discards_invalid_entries() {
+        let (_dir, _layout, env, _logger) = test_env();
+        let schedule = parse_retry_schedule(&env);
+        assert_eq!(schedule.len(), 2);
+        assert_eq!(schedule[0], Duration::seconds(1));
+    }
+
+    #[test]
+    fn next_delay_handles_empty_schedule() {
+        let schedule = vec![Duration::seconds(1), Duration::minutes(5)];
+        assert_eq!(next_delay(1, &schedule), Duration::seconds(1));
+        assert_eq!(next_delay(6, &schedule), Duration::minutes(5));
+        assert_eq!(next_delay(3, &[]), Duration::minutes(1));
+    }
+
+    #[test]
+    fn split_headers_body_reports_missing_marker() {
+        let err = split_headers_body(b"Subject: hi").unwrap_err();
+        assert!(err.to_string().contains("separator"));
+    }
+
+    #[test]
+    fn header_value_unfolds_continuations() {
+        let headers = "Subject: Hello\r\n\tWorld\r\n";
+        let value = header_value(headers, "subject").unwrap();
+        assert_eq!(value, "Hello World");
+    }
+
+    #[test]
+    fn queue_draft_generates_signed_message() {
+        let (_dir, layout, env, logger) = test_env();
         let pipeline = OutboxPipeline::new(layout.clone(), env, logger);
         let draft_ulid = crate::util::ulid::generate();
         let draft_path = layout.drafts().join(format!("{draft_ulid}.md"));
@@ -552,11 +588,7 @@ mod tests {
 
     #[test]
     fn dispatch_moves_successful_message() {
-        let dir = tempfile::tempdir().unwrap();
-        let layout = MailLayout::new(dir.path());
-        layout.ensure().unwrap();
-        let env = EnvConfig::default();
-        let logger = Logger::new(layout.root(), LogLevel::Off).unwrap();
+        let (_dir, layout, env, logger) = test_env();
         let transport = Arc::new(RecordingTransport::success());
         let pipeline = OutboxPipeline::with_transport(layout.clone(), env, logger, transport);
         let draft_ulid = crate::util::ulid::generate();
@@ -581,11 +613,7 @@ mod tests {
 
     #[test]
     fn dispatch_records_retry_on_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let layout = MailLayout::new(dir.path());
-        layout.ensure().unwrap();
-        let env = EnvConfig::default();
-        let logger = Logger::new(layout.root(), LogLevel::Off).unwrap();
+        let (_dir, layout, env, logger) = test_env();
         let transport = Arc::new(RecordingTransport::fail());
         let pipeline = OutboxPipeline::with_transport(layout.clone(), env, logger, transport);
         let draft_ulid = crate::util::ulid::generate();
@@ -605,6 +633,44 @@ mod tests {
         assert_eq!(outbound.attempts, 1);
         assert!(outbound.last_error.unwrap().contains("forced"));
         assert!(outbound.next_attempt_at.is_some());
+    }
+
+    #[test]
+    fn finish_dispatch_moves_related_files() {
+        let (_dir, layout, mut env, logger) = test_env();
+        env.render_mode = "strict".into();
+        let pipeline = OutboxPipeline::new(layout.clone(), env.clone(), logger);
+        let outbox_dir = layout.outbox();
+        fs::create_dir_all(&outbox_dir).unwrap();
+        let message_path = outbox_dir.join("01ARZ3NDEKTSV4RRFFQ69G5FAV.eml");
+        fs::write(&message_path, b"message").unwrap();
+        let html_path = outbox_dir.join("01ARZ3NDEKTSV4RRFFQ69G5FAV.html");
+        fs::write(&html_path, b"<p>hi</p>").unwrap();
+        let plain_path = outbox_dir.join("01ARZ3NDEKTSV4RRFFQ69G5FAV.txt");
+        fs::write(&plain_path, b"hi").unwrap();
+        let sidecar_path = outbox_dir.join("01ARZ3NDEKTSV4RRFFQ69G5FAV.yml");
+        let mut sidecar = MessageSidecar::new(
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV.eml",
+            "outbox",
+            &env.render_mode,
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV.html",
+            "deadbeef",
+            HeadersCache::new("Alice", "Hello"),
+        );
+        sidecar.set_plain_render("01ARZ3NDEKTSV4RRFFQ69G5FAV.txt");
+        let yaml = serde_yaml::to_string(&sidecar).unwrap();
+        write_atomic(&sidecar_path, yaml.as_bytes()).unwrap();
+
+        pipeline
+            .finish_dispatch(&sidecar, &message_path, &sidecar_path)
+            .unwrap();
+
+        let sent_dir = layout.sent();
+        assert!(sent_dir.join("01ARZ3NDEKTSV4RRFFQ69G5FAV.eml").exists());
+        assert!(sent_dir.join("01ARZ3NDEKTSV4RRFFQ69G5FAV.html").exists());
+        assert!(sent_dir.join("01ARZ3NDEKTSV4RRFFQ69G5FAV.txt").exists());
+        assert!(!sidecar_path.exists());
     }
 
     struct RecordingTransport {

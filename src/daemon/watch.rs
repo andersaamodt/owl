@@ -98,7 +98,7 @@ fn watch_loop(
                 let _ = sender.send(res);
             }
         },
-        config.clone(),
+        config,
     ) {
         Ok(watcher) => watchers.push(Box::new(watcher)),
         Err(err) => handler(WatchEvent {
@@ -159,23 +159,19 @@ fn dispatch_event(list: WatchList, handler: &Handler, event: notify::Event) {
 
 fn classify_event(kind: &EventKind) -> Option<WatchEventKind> {
     match kind {
-        EventKind::Create(create) => match create {
-            CreateKind::Any | CreateKind::File | CreateKind::Folder => {
-                Some(WatchEventKind::Created)
-            }
-            _ => None,
-        },
+        EventKind::Create(CreateKind::Any | CreateKind::File | CreateKind::Folder) => {
+            Some(WatchEventKind::Created)
+        }
+        EventKind::Create(_) => None,
         EventKind::Modify(ModifyKind::Any)
         | EventKind::Modify(ModifyKind::Data(DataChange::Content))
         | EventKind::Modify(ModifyKind::Data(DataChange::Any))
         | EventKind::Modify(ModifyKind::Metadata(_))
         | EventKind::Modify(ModifyKind::Name(_)) => Some(WatchEventKind::Modified),
-        EventKind::Remove(remove) => match remove {
-            RemoveKind::Any | RemoveKind::File | RemoveKind::Folder => {
-                Some(WatchEventKind::Removed)
-            }
-            _ => None,
-        },
+        EventKind::Remove(RemoveKind::Any | RemoveKind::File | RemoveKind::Folder) => {
+            Some(WatchEventKind::Removed)
+        }
+        EventKind::Remove(_) => None,
         _ => None,
     }
 }

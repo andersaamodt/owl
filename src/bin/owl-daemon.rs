@@ -62,8 +62,30 @@ fn execute(cli: &DaemonCli) -> Result<()> {
     flag::register(SIGINT, Arc::clone(&term_flag))?;
     flag::register(SIGTERM, Arc::clone(&term_flag))?;
 
+    run_until_shutdown(handles, logger, term_flag, || {
+        thread::sleep(Duration::from_millis(200))
+    })
+}
+
+fn mail_root(env_path: &Path) -> PathBuf {
+    env_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn run_until_shutdown<F>(
+    handles: service::DaemonHandles,
+    logger: Logger,
+    term_flag: Arc<AtomicBool>,
+    mut sleeper: F,
+) -> Result<()>
+where
+    F: FnMut(),
+{
     while !term_flag.load(Ordering::Relaxed) {
-        thread::sleep(Duration::from_millis(200));
+        sleeper();
     }
 
     logger.log(
@@ -75,17 +97,12 @@ fn execute(cli: &DaemonCli) -> Result<()> {
     Ok(())
 }
 
-fn mail_root(env_path: &Path) -> PathBuf {
-    env_path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
     use tempfile::tempdir;
 
     #[test]
@@ -109,5 +126,36 @@ mod tests {
             once: true,
         };
         execute(&cli).unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn run_until_shutdown_logs_signal_and_stops_handles() {
+        let dir = tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+
+        let env = EnvConfig::default();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+        let handles = service::start(layout.clone(), env, logger.clone()).unwrap();
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let flag_for_sleep = Arc::clone(&flag);
+        let mut first_call = true;
+
+        run_until_shutdown(handles, logger.clone(), flag, move || {
+            if first_call {
+                flag_for_sleep.store(true, Ordering::SeqCst);
+                first_call = false;
+            }
+        })
+        .unwrap();
+
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.message == "daemon.shutdown")
+        );
     }
 }
