@@ -151,6 +151,7 @@ pub fn start_with_transport(
 mod tests {
     use super::*;
     use crate::model::{filename::outbox_message_filename, message::MessageSidecar};
+    use serial_test::serial;
     use std::time::Instant;
 
     #[test]
@@ -158,8 +159,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
-        let mut env = EnvConfig::default();
-        env.retry_backoff = vec!["1s".into()];
+        let env = EnvConfig {
+            retry_backoff: vec!["1s".into()],
+            ..EnvConfig::default()
+        };
         let logger = Logger::new(layout.root(), LogLevel::Off).unwrap();
         let transport: Arc<dyn MailTransport> = Arc::new(SucceedingTransport);
         let pipeline = Arc::new(OutboxPipeline::with_transport(
@@ -202,6 +205,78 @@ mod tests {
         }
         assert!(sent_path.exists());
         handles.stop();
+    }
+
+    #[test]
+    #[serial]
+    fn start_logs_dispatch_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let env = EnvConfig::default();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+        let sidecar_path = layout.outbox().join("broken.yml");
+        std::fs::write(&sidecar_path, "{ invalid").unwrap();
+
+        let handles = start(layout.clone(), env, logger.clone()).unwrap();
+        handles.stop();
+
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.message == "daemon.outbox.start_error")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn retention_logs_rules_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let env = EnvConfig::default();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+
+        let rules_path = layout.root().join("accepted/.rules");
+        std::fs::create_dir_all(rules_path.parent().unwrap()).unwrap();
+        std::fs::write(&rules_path, "invalid").unwrap();
+
+        let handles = start(layout.clone(), env, logger.clone()).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        handles.stop();
+
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.message == "daemon.retention.rules_error")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn retention_logs_enforcement_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let env = EnvConfig::default();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+
+        let settings_path = layout.root().join("spam/.settings");
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(&settings_path, "delete_after=invalid").unwrap();
+
+        let handles = start(layout.clone(), env, logger.clone()).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        handles.stop();
+
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.message == "daemon.retention.error")
+        );
     }
 
     struct SucceedingTransport;

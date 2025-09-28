@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs, path::Path};
+use std::{collections::HashMap, fs, path::Path, str::FromStr};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -55,10 +55,10 @@ impl EnvConfig {
     pub fn from_file(path: &Path) -> Result<Self> {
         let data =
             fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        Self::from_str(&data)
+        data.parse()
     }
 
-    pub fn from_str(data: &str) -> Result<Self> {
+    pub fn parse_env(data: &str) -> Result<Self> {
         let mut map = HashMap::new();
         for (idx, line) in data.lines().enumerate() {
             let line = line.trim();
@@ -171,6 +171,14 @@ impl EnvConfig {
     }
 }
 
+impl FromStr for EnvConfig {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse_env(s)
+    }
+}
+
 fn bool_to_env(value: bool) -> &'static str {
     if value { "true" } else { "false" }
 }
@@ -189,17 +197,18 @@ mod tests {
 
     #[test]
     fn parse_custom() {
-        let cfg = EnvConfig::from_str("keep_plus_tags=true\nretry_backoff=1m,2m\n").unwrap();
+        let cfg: EnvConfig = "keep_plus_tags=true\nretry_backoff=1m,2m\n"
+            .parse()
+            .unwrap();
         assert!(cfg.keep_plus_tags);
         assert_eq!(cfg.retry_backoff, vec!["1m", "2m"]);
     }
 
     #[test]
     fn parse_all_fields() {
-        let cfg = EnvConfig::from_str(
-            "dmarc_policy=quarantine\ndkim_selector=owl\nletsencrypt_method=dns\nmax_size_quarantine=10M\nmax_size_approved_default=20M\ncontacts_dir=/tmp/contacts\nlogging=verbose_full\nrender_mode=moderate\nload_external_per_message=false\nretry_backoff=1m\nsmtp_host=smtp.example.org\nsmtp_port=2525\nsmtp_username=alice\nsmtp_password=secret\nsmtp_starttls=false\n",
-        )
-        .unwrap();
+        let cfg: EnvConfig = "dmarc_policy=quarantine\ndkim_selector=owl\nletsencrypt_method=dns\nmax_size_quarantine=10M\nmax_size_approved_default=20M\ncontacts_dir=/tmp/contacts\nlogging=verbose_full\nrender_mode=moderate\nload_external_per_message=false\nretry_backoff=1m\nsmtp_host=smtp.example.org\nsmtp_port=2525\nsmtp_username=alice\nsmtp_password=secret\nsmtp_starttls=false\n"
+            .parse()
+            .unwrap();
         assert_eq!(cfg.dmarc_policy, "quarantine");
         assert_eq!(cfg.dkim_selector, "owl");
         assert_eq!(cfg.letsencrypt_method, "dns");
@@ -228,13 +237,15 @@ mod tests {
 
     #[test]
     fn parse_invalid_line_fails() {
-        assert!(EnvConfig::from_str("invalid").is_err());
+        assert!("invalid".parse::<EnvConfig>().is_err());
     }
 
     #[test]
     fn serialize_to_env() {
-        let mut cfg = EnvConfig::default();
-        cfg.keep_plus_tags = true;
+        let cfg = EnvConfig {
+            keep_plus_tags: true,
+            ..EnvConfig::default()
+        };
         let rendered = cfg.to_env_string();
         assert!(rendered.contains("keep_plus_tags=true"));
         assert!(rendered.contains("smtp_host="));

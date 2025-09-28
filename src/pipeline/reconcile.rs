@@ -52,17 +52,15 @@ pub fn prune_list(
 ) -> Result<RetentionSummary> {
     let list_dir = layout.root().join(list);
     let mut summary = RetentionSummary::default();
-    if should_prune(policy)? {
-        if list_dir.exists() {
-            for entry in fs::read_dir(&list_dir)? {
-                let entry = entry?;
-                if entry.file_type()?.is_dir() {
-                    if entry.file_name() == "attachments" {
-                        continue;
-                    }
-                    let mut removed = prune_directory(&entry.path(), policy, now)?;
-                    summary.messages_removed.append(&mut removed);
+    if should_prune(policy)? && list_dir.exists() {
+        for entry in fs::read_dir(&list_dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                if entry.file_name() == "attachments" {
+                    continue;
                 }
+                let mut removed = prune_directory(&entry.path(), policy, now)?;
+                summary.messages_removed.append(&mut removed);
             }
         }
     }

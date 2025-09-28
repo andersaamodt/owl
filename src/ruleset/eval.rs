@@ -28,7 +28,7 @@ mod tests {
     #[test]
     fn precedence_applies() {
         let addr = Address::parse("foo@bar.com", false).unwrap();
-        let banned = RuleSet::from_str("@bar.com").unwrap();
+        let banned = RuleSet::parse("@bar.com").unwrap();
         let spam = RuleSet::default();
         let accepted = RuleSet::default();
         assert_eq!(evaluate(&addr, &accepted, &spam, &banned), Route::Banned);
@@ -39,7 +39,7 @@ mod tests {
         let addr = Address::parse("foo@example.com", false).unwrap();
         let banned = RuleSet::default();
         let spam = RuleSet::default();
-        let accepted = RuleSet::from_str("@example.com").unwrap();
+        let accepted = RuleSet::parse("@example.com").unwrap();
         assert_eq!(evaluate(&addr, &accepted, &spam, &banned), Route::Accepted);
     }
 
@@ -47,7 +47,7 @@ mod tests {
     fn spam_route() {
         let addr = Address::parse("foo@spam.org", false).unwrap();
         let banned = RuleSet::default();
-        let spam = RuleSet::from_str("@spam.org").unwrap();
+        let spam = RuleSet::parse("@spam.org").unwrap();
         let accepted = RuleSet::default();
         assert_eq!(evaluate(&addr, &accepted, &spam, &banned), Route::Spam);
     }
@@ -69,9 +69,9 @@ mod tests {
         fn banned_always_wins(local in "[a-z]{1,8}", domain in "[a-z]{1,10}\\.test") {
             let raw = format!("{}@{}", local, domain);
             let addr = Address::parse(&raw, false).unwrap();
-            let accepted = RuleSet::from_str(&format!("@{}", domain)).unwrap();
-            let spam = RuleSet::from_str(&format!("{}@{}", local, domain)).unwrap();
-            let banned = RuleSet::from_str(&format!("@{}", domain)).unwrap();
+            let accepted = RuleSet::parse(&format!("@{}", domain)).unwrap();
+            let spam = RuleSet::parse(&format!("{}@{}", local, domain)).unwrap();
+            let banned = RuleSet::parse(&format!("@{}", domain)).unwrap();
             prop_assert_eq!(evaluate(&addr, &accepted, &spam, &banned), Route::Banned);
         }
 
@@ -79,8 +79,8 @@ mod tests {
         fn spam_beats_accepted(local in "[a-z]{1,8}", domain in "[a-z]{1,10}\\.example") {
             let raw = format!("{}@{}", local, domain);
             let addr = Address::parse(&raw, false).unwrap();
-            let accepted = RuleSet::from_str(&format!("@{}", domain)).unwrap();
-            let spam = RuleSet::from_str(&format!("{}@{}", local, domain)).unwrap();
+            let accepted = RuleSet::parse(&format!("@{}", domain)).unwrap();
+            let spam = RuleSet::parse(&format!("{}@{}", local, domain)).unwrap();
             let banned = RuleSet::default();
             prop_assert_eq!(evaluate(&addr, &accepted, &spam, &banned), Route::Spam);
         }

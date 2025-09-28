@@ -186,7 +186,7 @@ impl LogEntry {
     }
 }
 
-pub fn tail<'a>(entries: &'a [LogEntry], max: usize) -> &'a [LogEntry] {
+pub fn tail(entries: &[LogEntry], max: usize) -> &[LogEntry] {
     if entries.len() <= max {
         entries
     } else {
@@ -197,6 +197,7 @@ pub fn tail<'a>(entries: &'a [LogEntry], max: usize) -> &'a [LogEntry] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn parse_levels() {
@@ -262,5 +263,30 @@ mod tests {
         assert_eq!(slice.len(), 2);
         assert_eq!(slice[0].message, "b");
         assert_eq!(slice[1].message, "c");
+    }
+
+    #[test]
+    fn tail_returns_all_when_max_exceeds_len() {
+        let entries = vec![LogEntry::new(LogLevel::Minimal, "only", None)];
+        let slice = tail(&entries, 5);
+        assert_eq!(slice.len(), 1);
+        assert_eq!(slice[0].message, "only");
+    }
+
+    #[test]
+    fn load_entries_missing_file_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("absent.log");
+        let entries = Logger::load_entries(&path).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn load_entries_reports_json_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("owl.log");
+        fs::write(&path, "{not json}\n").unwrap();
+        let err = Logger::load_entries(&path).unwrap_err();
+        assert!(err.to_string().contains("failed to parse log line 1"));
     }
 }

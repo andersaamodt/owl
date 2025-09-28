@@ -17,10 +17,8 @@ impl Address {
             bail!("missing @ in address: {input}");
         };
         let mut local = local_raw.trim().to_ascii_lowercase();
-        if !keep_plus_tags {
-            if let Some((base, _tag)) = local.split_once('+') {
-                local = base.to_string();
-            }
+        if !keep_plus_tags && let Some((base, _tag)) = local.split_once('+') {
+            local = base.to_string();
         }
         let domain_lower = domain_raw.trim().to_ascii_lowercase();
         let domain_ascii =

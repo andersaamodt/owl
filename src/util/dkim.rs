@@ -47,9 +47,7 @@ pub fn ensure_ed25519_keypair(dir: &Path, selector: &str) -> Result<DkimMaterial
         .to_string();
     let dns_value = format!("v=DKIM1; k=ed25519; p={public_key}");
 
-    if generated {
-        write_atomic(&dns, dns_value.as_bytes())?;
-    } else if !dns.exists() {
+    if generated || !dns.exists() {
         write_atomic(&dns, dns_value.as_bytes())?;
     } else {
         let existing = fs::read_to_string(&dns)
@@ -65,7 +63,7 @@ pub fn ensure_ed25519_keypair(dir: &Path, selector: &str) -> Result<DkimMaterial
         private_key_path: private,
         public_key_path: public,
         dns_record_path: dns,
-        public_key: public_key,
+        public_key,
         selector: selector.to_string(),
     })
 }
@@ -203,6 +201,59 @@ fn set_private_permissions(_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collect_signed_headers_errors_on_missing_field() {
+        let err = collect_signed_headers("Subject: hi\r\n\r\n", &["from"]).unwrap_err();
+        assert!(err.to_string().contains("header from missing"));
+    }
+
+    #[test]
+    fn canonicalize_body_trims_trailing_lines() {
+        let body = b"hello\r\nworld\r\n\r\n";
+        let canonical = canonicalize_body_simple(body);
+        assert_eq!(canonical, b"hello\r\nworld\r\n");
+    }
+
+    #[test]
+    fn signer_reports_invalid_private_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let private = dir.path().join("selector.private");
+        let public = dir.path().join("selector.public");
+        let dns = dir.path().join("selector.dns");
+        fs::write(&private, b"not a pkcs8 key").unwrap();
+        let material = DkimMaterial {
+            private_key_path: private,
+            public_key_path: public,
+            dns_record_path: dns,
+            public_key: String::new(),
+            selector: "selector".into(),
+        };
+        let err = DkimSigner::from_material(&material).unwrap_err();
+        assert!(err.to_string().contains("failed to parse DKIM private key"));
+    }
+
+    #[test]
+    fn ensure_keypair_recreates_missing_dns() {
+        let dir = tempfile::tempdir().unwrap();
+        let material = ensure_ed25519_keypair(dir.path(), "sel").unwrap();
+        fs::remove_file(&material.dns_record_path).unwrap();
+        let refreshed = ensure_ed25519_keypair(dir.path(), "sel").unwrap();
+        assert!(refreshed.dns_record_path.exists());
+        let dns_contents = fs::read_to_string(refreshed.dns_record_path).unwrap();
+        assert!(dns_contents.starts_with("v=DKIM1"));
+    }
+
+    #[test]
+    fn ensure_keypair_updates_stale_dns_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let material = ensure_ed25519_keypair(dir.path(), "sel").unwrap();
+        fs::write(&material.dns_record_path, "old record").unwrap();
+        let refreshed = ensure_ed25519_keypair(dir.path(), "sel").unwrap();
+        let dns_contents = fs::read_to_string(refreshed.dns_record_path).unwrap();
+        assert!(dns_contents.starts_with("v=DKIM1"));
+        assert_ne!(dns_contents.trim(), "old record");
+    }
 
     #[test]
     fn generates_and_persists_keys() {

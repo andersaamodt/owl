@@ -2,6 +2,7 @@ use crate::model::address::Address;
 use anyhow::{Result, bail};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Rule {
@@ -53,7 +54,7 @@ pub struct RuleSet {
 }
 
 impl RuleSet {
-    pub fn from_str(data: &str) -> Result<Self> {
+    pub fn parse(data: &str) -> Result<Self> {
         let mut rules = Vec::new();
         for line in data.lines() {
             let trimmed = line.trim();
@@ -79,6 +80,14 @@ impl RuleSet {
     }
 }
 
+impl FromStr for RuleSet {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,7 +108,7 @@ mod tests {
     #[test]
     fn ruleset_evaluates_in_order() {
         let data = "@example.org\ncarol@example.org";
-        let set = RuleSet::from_str(data).unwrap();
+        let set: RuleSet = data.parse().unwrap();
         let addr = Address::parse("carol@example.org", false).unwrap();
         let matched = set.evaluate(&addr).unwrap();
         assert!(matches!(matched, Rule::DomainSuffix(_)));
