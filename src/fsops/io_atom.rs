@@ -27,6 +27,7 @@ pub fn read_to_string(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::fs;
 
     #[test]
@@ -37,5 +38,44 @@ mod tests {
         let contents = read_to_string(&file).unwrap();
         assert_eq!(contents, "hello");
         fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    fn write_atomic_creates_parent_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("nested").join("file.txt");
+        write_atomic(&file, b"data").unwrap();
+        let contents = read_to_string(&file).unwrap();
+        assert_eq!(contents, "data");
+    }
+
+    #[test]
+    fn write_atomic_reports_parent_creation_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("occupied");
+        fs::write(&blocker, b"file").unwrap();
+        let nested = blocker.join("child.txt");
+        let err = write_atomic(&nested, b"data").unwrap_err();
+        let io_err = err.downcast_ref::<std::io::Error>().unwrap();
+        assert_eq!(io_err.kind(), std::io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    #[serial]
+    fn write_atomic_without_parent_creates_in_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let path = Path::new("standalone.txt");
+        write_atomic(path, b"contents").unwrap();
+        let data = read_to_string(path).unwrap();
+        assert_eq!(data, "contents");
+        std::env::set_current_dir(original).unwrap();
+    }
+
+    #[test]
+    fn write_atomic_with_empty_path_errors() {
+        let err = write_atomic(Path::new(""), b"data").unwrap_err();
+        assert!(err.to_string().contains("persist"));
     }
 }

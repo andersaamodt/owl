@@ -61,9 +61,9 @@ mod tests {
         }
         unsafe { std::env::set_var("PATH", &new_path) };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-        match original {
-            Some(orig) => unsafe { std::env::set_var("PATH", orig) },
-            None => unsafe { std::env::remove_var("PATH") },
+        unsafe { std::env::remove_var("PATH") };
+        if let Some(orig) = original {
+            unsafe { std::env::set_var("PATH", orig) };
         }
         result.expect("ops env callback panicked")
     }
@@ -108,6 +108,19 @@ mod tests {
             json: false,
         };
         with_fake_ops_env(|| execute(cli).unwrap());
+    }
+
+    #[test]
+    #[serial]
+    fn with_fake_ops_env_restores_missing_path() {
+        let original = std::env::var_os("PATH");
+        unsafe { std::env::remove_var("PATH") };
+        with_fake_ops_env(|| ());
+        assert!(std::env::var_os("PATH").is_none());
+        match original {
+            Some(path) => unsafe { std::env::set_var("PATH", path) },
+            None => {}
+        }
     }
 
     #[test]

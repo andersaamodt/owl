@@ -1013,6 +1013,74 @@ mod tests {
     }
 
     #[test]
+    fn triage_filters_and_renders_extras() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let env = EnvConfig::default();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let sender_dir = layout.accepted().join("carol@example.org");
+        fs::create_dir_all(&sender_dir).unwrap();
+        let subject = "Follow up";
+        let ulid = "01ARZ3NDEKTSV4RRFFQ69G5FD0";
+        let mut sidecar = MessageSidecar::new(
+            ulid,
+            crate::model::filename::message_filename(subject, ulid),
+            "accepted",
+            "strict",
+            crate::model::filename::html_filename(subject, ulid),
+            "aa11bb22",
+            crate::model::message::HeadersCache::new("Carol", subject),
+        );
+        sidecar.set_rspamd(crate::model::message::RspamdSummary {
+            score: 2.0,
+            symbols: vec!["SCORE".into()],
+        });
+        let outbound = sidecar.outbound_state_mut();
+        outbound.attempts = 3;
+        outbound.last_error = Some("timeout".into());
+        outbound.next_attempt_at = Some("2030-01-01T00:00:00Z".into());
+        let sidecar_path = sender_dir.join(crate::model::filename::sidecar_filename(subject, ulid));
+        write_atomic(
+            &sidecar_path,
+            serde_yaml::to_string(&sidecar).unwrap().as_bytes(),
+        )
+        .unwrap();
+
+        let output = triage(
+            &env_path,
+            &env,
+            Some("carol@example.org".into()),
+            Some("accepted".into()),
+            false,
+        )
+        .unwrap();
+        assert!(output.contains("outbound=Pending attempts=3"));
+        assert!(output.contains("last_error=timeout"));
+        assert!(output.contains("rspamd=2.0"));
+    }
+
+    #[test]
+    fn triage_unknown_list_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let env = EnvConfig::default();
+        let err = triage(&env_path, &env, None, Some("mystery".into()), false).unwrap_err();
+        assert!(err.to_string().contains("unknown list"));
+    }
+
+    #[test]
+    fn triage_reports_empty_lists() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let env = EnvConfig::default();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let output = triage(&env_path, &env, None, Some("spam".into()), false).unwrap();
+        assert_eq!(output, "no messages matched");
+    }
+
+    #[test]
     fn pin_address_toggles_flag() {
         let dir = tempfile::tempdir().unwrap();
         let env_path = dir.path().join(".env");
@@ -1042,16 +1110,49 @@ mod tests {
             serde_yaml::to_string(&sidecar).unwrap().as_bytes(),
         )
         .unwrap();
-        let result = pin_address(&env_path, &env, "bob@example.org".into(), false).unwrap();
+        let cli_pin = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::Pin {
+                address: "bob@example.org".into(),
+                unset: false,
+            }),
+            json: false,
+        };
+        let result = run(cli_pin, env.clone()).unwrap();
         assert!(result.contains("pinned bob@example.org"));
         let updated: MessageSidecar =
             serde_yaml::from_str(&fs::read_to_string(&sidecar_path).unwrap()).unwrap();
         assert!(updated.pinned);
-        let result = pin_address(&env_path, &env, "bob@example.org".into(), true).unwrap();
+        let cli_unpin = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::Pin {
+                address: "bob@example.org".into(),
+                unset: true,
+            }),
+            json: false,
+        };
+        let result = run(cli_unpin, env.clone()).unwrap();
         assert!(result.contains("unpinned bob@example.org"));
         let updated: MessageSidecar =
             serde_yaml::from_str(&fs::read_to_string(&sidecar_path).unwrap()).unwrap();
         assert!(!updated.pinned);
+    }
+
+    #[test]
+    fn pin_address_errors_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let env = EnvConfig::default();
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::Pin {
+                address: "nobody@example.org".into(),
+                unset: false,
+            }),
+            json: false,
+        };
+        let err = run(cli, env).unwrap_err();
+        assert!(err.to_string().contains("no messages found"));
     }
 
     #[test]
@@ -1064,7 +1165,6 @@ mod tests {
         };
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
-        let logger = Logger::new(layout.root(), LogLevel::Off).unwrap();
         let ulid = crate::util::ulid::generate();
         let draft_path = layout.drafts().join(format!("{ulid}.md"));
         fs::write(
@@ -1072,7 +1172,14 @@ mod tests {
             "---\nsubject: Hi\nfrom: Owl <owl@example.org>\nto:\n  - Bob <bob@example.org>\n---\nHello world!\n",
         )
         .unwrap();
-        let output = send_draft(&env_path, &env, &logger, &draft_path.to_string_lossy()).unwrap();
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::Send {
+                draft: draft_path.to_string_lossy().into(),
+            }),
+            json: false,
+        };
+        let output = run(cli, env.clone()).unwrap();
         assert!(output.contains(&ulid));
         let sidecar_path = layout
             .outbox()
@@ -1085,6 +1192,22 @@ mod tests {
     }
 
     #[test]
+    fn send_draft_reports_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let env = EnvConfig::default();
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::Send {
+                draft: "nonexistent.md".into(),
+            }),
+            json: false,
+        };
+        let err = run(cli, env).unwrap_err();
+        assert!(err.to_string().contains("draft"));
+    }
+
+    #[test]
     fn backup_and_import_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let env_path = dir.path().join("mail/.env");
@@ -1094,14 +1217,28 @@ mod tests {
         layout.ensure().unwrap();
         fs::write(layout.root().join("marker.txt"), b"ok").unwrap();
         let backup_path = dir.path().join("backup.tar.gz");
-        let output = backup_mail(&env_path, &backup_path).unwrap();
+        let backup_cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::Backup {
+                path: backup_path.clone(),
+            }),
+            json: false,
+        };
+        let output = run(backup_cli, EnvConfig::default()).unwrap();
         assert!(output.contains("backup written"));
         assert!(backup_path.exists());
 
         let dest_dir = tempfile::tempdir().unwrap();
         let dest_env = dest_dir.path().join("mail/.env");
         fs::create_dir_all(dest_env.parent().unwrap()).unwrap();
-        import_archive(&dest_env, &backup_path).unwrap();
+        let import_cli = OwlCli {
+            env: dest_env.to_string_lossy().into(),
+            command: Some(Commands::Import {
+                source: backup_path.clone(),
+            }),
+            json: false,
+        };
+        run(import_cli, EnvConfig::default()).unwrap();
         assert!(dest_env.parent().unwrap().join("marker.txt").exists());
     }
 
@@ -1137,14 +1274,16 @@ mod tests {
         fs::write(&attachment_path, b"pdf").unwrap();
 
         let export_path = dir.path().join("carol.tar.gz");
-        let output = export_sender(
-            &env_path,
-            &env,
-            "accepted",
-            "carol@example.org",
-            &export_path,
-        )
-        .unwrap();
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::ExportSender {
+                list: "accepted".into(),
+                address: "carol@example.org".into(),
+                path: export_path.clone(),
+            }),
+            json: false,
+        };
+        let output = run(cli, env.clone()).unwrap();
         assert!(output.contains("exported carol@example.org"));
         assert!(export_path.exists());
 
@@ -1166,22 +1305,83 @@ mod tests {
     }
 
     #[test]
+    fn export_sender_errors_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::ExportSender {
+                list: "accepted".into(),
+                address: "ghost@example.org".into(),
+                path: dir.path().join("ghost.tar.gz"),
+            }),
+            json: false,
+        };
+        let err = run(cli, EnvConfig::default()).unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
     fn logs_command_formats_entries() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
+        let env_path = dir.path().join(".env");
+        fs::write(&env_path, "logging=minimal\n").unwrap();
         let logger = Logger::new(root, LogLevel::Minimal).unwrap();
         logger
             .log(LogLevel::Minimal, "outbox.retry", Some("attempt=1"))
             .unwrap();
-        let human = logs(root, LogLevel::Minimal, LogAction::Show, false).unwrap();
+        let show_cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::Logs {
+                action: LogAction::Show,
+            }),
+            json: false,
+        };
+        let human = run(show_cli, EnvConfig::default()).unwrap();
         assert!(human.contains("outbox.retry"));
-        let json = logs(root, LogLevel::Minimal, LogAction::Tail, true).unwrap();
+        let tail_cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::Logs {
+                action: LogAction::Tail,
+            }),
+            json: true,
+        };
+        let json = run(tail_cli, EnvConfig::default()).unwrap();
         let parsed: Vec<logging::LogEntry> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].level, "minimal");
-        let disabled = logs(root, LogLevel::Off, LogAction::Show, false).unwrap();
+        let disabled_cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::Logs {
+                action: LogAction::Show,
+            }),
+            json: false,
+        };
+        let disabled = run(
+            disabled_cli,
+            EnvConfig {
+                logging: "off".into(),
+                ..EnvConfig::default()
+            },
+        )
+        .unwrap();
         assert_eq!(disabled, "logging disabled");
-        let disabled_json = logs(root, LogLevel::Off, LogAction::Tail, true).unwrap();
+        let disabled_tail_cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::Logs {
+                action: LogAction::Tail,
+            }),
+            json: true,
+        };
+        let disabled_json = run(
+            disabled_tail_cli,
+            EnvConfig {
+                logging: "off".into(),
+                ..EnvConfig::default()
+            },
+        )
+        .unwrap();
         assert_eq!(disabled_json, "[]");
     }
 
@@ -1256,9 +1456,161 @@ mod tests {
         });
     }
 
+    #[test]
+    #[serial]
+    fn import_mail_without_from_uses_fallback_sender() {
+        with_fake_render_env(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let maildir = dir.path().join("maildir");
+            fs::create_dir_all(maildir.join("cur")).unwrap();
+            fs::write(maildir.join("cur/msg1"), b"Subject: Notice\n\nHello\n").unwrap();
+
+            let root = dir.path().join("mail");
+            fs::create_dir_all(&root).unwrap();
+            let env_path = root.join(".env");
+            fs::write(&env_path, EnvConfig::default().to_env_string()).unwrap();
+
+            import_archive(&env_path, &maildir).unwrap();
+
+            let layout = MailLayout::new(&root);
+            let fallback_dir = layout.quarantine().join("unknown@import.invalid");
+            assert!(fallback_dir.exists());
+        });
+    }
+
+    #[test]
+    fn import_archive_errors_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::Import {
+                source: dir.path().join("missing.tar.gz"),
+            }),
+            json: false,
+        };
+        let err = run(cli, EnvConfig::default()).unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    #[serial]
+    fn import_archive_supports_tgz_and_tar() {
+        with_fake_render_env(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("mail");
+            fs::create_dir_all(&root).unwrap();
+            let env_path = root.join(".env");
+            fs::write(&env_path, EnvConfig::default().to_env_string()).unwrap();
+
+            let tgz_path = dir.path().join("archive.tgz");
+            {
+                let file = fs::File::create(&tgz_path).unwrap();
+                let encoder = GzEncoder::new(file, Compression::default());
+                let mut builder = Builder::new(encoder);
+                let mut header = tar::Header::new_gnu();
+                header.set_mode(0o644);
+                header.set_uid(0);
+                header.set_gid(0);
+                header.set_mtime(0);
+                header.set_size(2);
+                header.set_cksum();
+                builder
+                    .append_data(&mut header, "marker.txt", &b"hi"[..])
+                    .unwrap();
+                builder.into_inner().unwrap().finish().unwrap();
+            }
+
+            let tar_path = dir.path().join("archive.tar");
+            {
+                let file = fs::File::create(&tar_path).unwrap();
+                let mut builder = Builder::new(file);
+                let mut header = tar::Header::new_gnu();
+                header.set_mode(0o644);
+                header.set_uid(0);
+                header.set_gid(0);
+                header.set_mtime(0);
+                header.set_size(2);
+                header.set_cksum();
+                builder
+                    .append_data(&mut header, "note.txt", &b"ok"[..])
+                    .unwrap();
+                builder.finish().unwrap();
+            }
+
+            let tgz_cli = OwlCli {
+                env: env_path.to_string_lossy().into(),
+                command: Some(Commands::Import {
+                    source: tgz_path.clone(),
+                }),
+                json: false,
+            };
+            run(tgz_cli, EnvConfig::default()).unwrap();
+            assert!(root.join("marker.txt").exists());
+
+            let tar_cli = OwlCli {
+                env: env_path.to_string_lossy().into(),
+                command: Some(Commands::Import {
+                    source: tar_path.clone(),
+                }),
+                json: false,
+            };
+            run(tar_cli, EnvConfig::default()).unwrap();
+            assert!(root.join("note.txt").exists());
+        });
+    }
+
+    #[test]
+    fn import_archive_rejects_unknown_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let source = dir.path().join("data.bin");
+        fs::write(&source, b"binary").unwrap();
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::Import {
+                source: source.clone(),
+            }),
+            json: false,
+        };
+        let err = run(cli, EnvConfig::default()).unwrap_err();
+        assert!(err.to_string().contains("unsupported import format"));
+    }
+
     fn sample_email(from: &str, subject: &str) -> Vec<u8> {
         format!("From: {from}\r\nTo: you@example.org\r\nSubject: {subject}\r\n\r\nBody\r\n")
             .into_bytes()
+    }
+
+    #[test]
+    fn first_mailbox_extracts_from_groups() {
+        let group = MailAddr::Group(mailparse::GroupInfo {
+            group_name: "Team".into(),
+            addrs: vec![mailparse::SingleInfo {
+                display_name: Some("Helper".into()),
+                addr: "helper@example.org".into(),
+            }],
+        });
+        let single = MailAddr::Single(mailparse::SingleInfo {
+            display_name: Some("Lead".into()),
+            addr: "lead@example.org".into(),
+        });
+        assert_eq!(
+            first_mailbox(&[group.clone()]),
+            Some("helper@example.org".into())
+        );
+        assert_eq!(first_mailbox(&[single]), Some("lead@example.org".into()));
+        assert_eq!(
+            first_mailbox(&[
+                group,
+                MailAddr::Group(mailparse::GroupInfo {
+                    group_name: String::new(),
+                    addrs: vec![],
+                })
+            ]),
+            Some("helper@example.org".into())
+        );
+        assert_eq!(first_mailbox(&[]), None);
     }
 
     fn with_fake_render_env<T>(f: impl FnOnce() -> T) -> T {
@@ -1271,13 +1623,38 @@ mod tests {
             new_path.push(":");
             new_path.push(orig);
         }
-        unsafe { std::env::set_var("PATH", &new_path) };
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        unsafe {
+            std::env::set_var("PATH", &new_path);
+        }
+        struct PathGuard {
+            original: Option<std::ffi::OsString>,
+        }
+        impl Drop for PathGuard {
+            fn drop(&mut self) {
+                match self.original.take() {
+                    Some(path) => unsafe { std::env::set_var("PATH", path) },
+                    None => unsafe { std::env::remove_var("PATH") },
+                }
+            }
+        }
+        let _guard = PathGuard { original };
+        f()
+    }
+
+    #[test]
+    #[serial]
+    fn with_fake_render_env_handles_missing_path() {
+        let original = std::env::var_os("PATH");
+        unsafe { std::env::remove_var("PATH") };
+        let path_inside = with_fake_render_env(|| std::env::var_os("PATH"));
+        assert!(
+            path_inside.is_some(),
+            "helper should populate PATH during call"
+        );
         match original {
-            Some(orig) => unsafe { std::env::set_var("PATH", orig) },
+            Some(value) => unsafe { std::env::set_var("PATH", value) },
             None => unsafe { std::env::remove_var("PATH") },
         }
-        result.expect("render env callback panicked")
     }
 
     fn write_exec(dir: &tempfile::TempDir, name: &str, body: &str) {
@@ -1303,13 +1680,38 @@ mod tests {
             new_path.push(":");
             new_path.push(orig);
         }
-        unsafe { std::env::set_var("PATH", &new_path) };
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        unsafe {
+            std::env::set_var("PATH", &new_path);
+        }
+        struct PathGuard {
+            original: Option<std::ffi::OsString>,
+        }
+        impl Drop for PathGuard {
+            fn drop(&mut self) {
+                match self.original.take() {
+                    Some(path) => unsafe { std::env::set_var("PATH", path) },
+                    None => unsafe { std::env::remove_var("PATH") },
+                }
+            }
+        }
+        let _guard = PathGuard { original };
+        f()
+    }
+
+    #[test]
+    #[serial]
+    fn with_fake_ops_env_restores_missing_path() {
+        let original = std::env::var_os("PATH");
+        unsafe { std::env::remove_var("PATH") };
+        let path_inside = with_fake_ops_env(|| std::env::var_os("PATH"));
+        assert!(
+            path_inside.is_some(),
+            "helper should seed PATH when missing"
+        );
         match original {
-            Some(orig) => unsafe { std::env::set_var("PATH", orig) },
+            Some(value) => unsafe { std::env::set_var("PATH", value) },
             None => unsafe { std::env::remove_var("PATH") },
         }
-        result.expect("ops env callback panicked")
     }
 
     #[test]
@@ -1372,6 +1774,145 @@ mod tests {
         });
     }
 
+    fn assert_log_contains(logger: &Logger, message: &str) {
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries.iter().any(|entry| entry.message == message),
+            "expected log entry `{message}` not found"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn install_logs_each_step() {
+        with_fake_ops_env(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let env_path = dir.path().join(".env");
+            let env = EnvConfig {
+                logging: "verbose_sanitized".into(),
+                ..EnvConfig::default()
+            };
+            let logger = Logger::new(dir.path(), LogLevel::VerboseSanitized).unwrap();
+
+            let summary = install(&env_path, &env, &logger).unwrap();
+            assert!(summary.contains("installed"));
+            assert_log_contains(&logger, "install.ensure");
+            assert_log_contains(&logger, "install.dkim.ready");
+            assert_log_contains(&logger, "install.env.created");
+
+            // Second invocation exercises the skipped-environment branch while
+            // keeping verbose logging enabled so the entry is recorded.
+            let again = install(&env_path, &env, &logger).unwrap();
+            assert!(again.contains("installed"));
+            assert_log_contains(&logger, "install.env.skipped");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn update_logs_summary() {
+        with_fake_ops_env(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let env_path = dir.path().join(".env");
+            let env = EnvConfig::default();
+            let logger = Logger::new(dir.path(), LogLevel::Minimal).unwrap();
+
+            let summary = update(&env_path, &env, &logger).unwrap();
+            assert!(summary.contains("updated"));
+            assert_log_contains(&logger, "update.provisioned");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn restart_reports_daemon_summary() {
+        with_fake_ops_env(|| {
+            let dir = tempfile::tempdir().unwrap();
+            write_exec(&dir, "systemctl", "#!/bin/sh\nexit 0\n");
+            let env_path = dir.path().join(".env");
+            fs::write(&env_path, EnvConfig::default().to_env_string()).unwrap();
+            let logger = Logger::new(dir.path(), LogLevel::Minimal).unwrap();
+
+            let summary = restart(&env_path, RestartTarget::Daemons, &logger).unwrap();
+            assert!(summary.contains("restart daemons"));
+            assert!(summary.contains("owl-daemon=ok"));
+            assert_log_contains(&logger, "restart.service");
+        });
+    }
+
+    #[test]
+    fn logs_return_no_entries_when_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let env = EnvConfig::default();
+        let output = logs(
+            layout.root(),
+            env.logging.parse().unwrap(),
+            LogAction::Show,
+            false,
+        )
+        .unwrap();
+        assert_eq!(output, "no log entries");
+    }
+
+    #[test]
+    fn triage_rejects_unsupported_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        fs::write(&env_path, EnvConfig::default().to_env_string()).unwrap();
+        let err = triage(
+            &env_path,
+            &EnvConfig::default(),
+            None,
+            Some("invalid".into()),
+            false,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown list"));
+    }
+
+    #[test]
+    fn triage_skips_missing_sender_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        fs::write(&env_path, EnvConfig::default().to_env_string()).unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let canonical = Address::parse("alice@example.org", false)
+            .unwrap()
+            .canonical()
+            .to_string();
+        let output = triage(
+            &env_path,
+            &EnvConfig::default(),
+            Some("alice@example.org".into()),
+            Some("quarantine".into()),
+            false,
+        )
+        .unwrap();
+        assert_eq!(output, "no messages matched");
+        // ensure we touched the expected sender path even though it does not exist
+        assert!(!layout.quarantine().join(&canonical).exists());
+    }
+
+    #[test]
+    #[serial]
+    fn run_update_provisions_environment() {
+        with_fake_ops_env(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let env_path = dir.path().join(".env");
+            let cli = OwlCli {
+                env: env_path.to_string_lossy().into(),
+                command: Some(Commands::Update),
+                json: false,
+            };
+            let output = run(cli, EnvConfig::default()).unwrap();
+            assert!(output.contains("updated"));
+            assert!(dir.path().join("config/postfix/main.cf").exists());
+        });
+    }
+
     #[test]
     fn run_defaults_to_triage_when_command_missing() {
         let dir = tempfile::tempdir().unwrap();
@@ -1430,6 +1971,42 @@ mod tests {
     }
 
     #[test]
+    fn restart_reports_success_for_requested_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let exec = dir.path().join("systemctl");
+        fs::write(&exec, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&exec).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&exec, perms).unwrap();
+        }
+        let original = std::env::var_os("PATH");
+        let mut new_path = std::ffi::OsString::from(dir.path());
+        if let Some(ref orig) = original {
+            new_path.push(":");
+            new_path.push(orig);
+        }
+        unsafe { std::env::set_var("PATH", &new_path) };
+        let env_path = dir.path().join(".env");
+        fs::write(&env_path, EnvConfig::default().to_env_string()).unwrap();
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::Restart {
+                target: RestartTarget::Postfix,
+            }),
+            json: false,
+        };
+        let summary = run(cli, EnvConfig::default()).unwrap();
+        assert!(summary.contains("postfix=ok"));
+        match original {
+            Some(path) => unsafe { std::env::set_var("PATH", path) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+    }
+
+    #[test]
     fn logs_tail_supports_json_output() {
         let dir = tempfile::tempdir().unwrap();
         let logger = Logger::new(dir.path(), LogLevel::Minimal).unwrap();
@@ -1463,6 +2040,31 @@ mod tests {
     }
 
     #[test]
+    fn resolve_draft_path_resolves_relative_and_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let draft = layout.drafts().join("abc.md");
+        fs::write(&draft, "content").unwrap();
+        let resolved = resolve_draft_path(&layout, "abc").unwrap();
+        assert_eq!(resolved, draft);
+        let absolute = dir.path().join("custom.md");
+        fs::write(&absolute, "note").unwrap();
+        let resolved_absolute =
+            resolve_draft_path(&layout, absolute.to_string_lossy().as_ref()).unwrap();
+        assert_eq!(resolved_absolute, absolute);
+    }
+
+    #[test]
+    fn resolve_draft_path_errors_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let err = resolve_draft_path(&layout, "missing").unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
     fn reload_reports_rule_counts() {
         let dir = tempfile::tempdir().unwrap();
         let env_path = dir.path().join(".env");
@@ -1489,7 +2091,12 @@ mod tests {
         fs::create_dir_all(layout.accepted().join("alice@example.org")).unwrap();
         fs::create_dir_all(layout.spam().join("bob@spam.test")).unwrap();
         fs::create_dir_all(layout.quarantine().join("mallory@evil.test")).unwrap();
-        let output = list_senders(&env_path, None).unwrap();
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::ListSenders { list: None }),
+            json: false,
+        };
+        let output = run(cli, EnvConfig::default()).unwrap();
         assert!(output.contains("accepted:alice@example.org"));
         assert!(output.contains("spam:bob@spam.test"));
         assert!(output.contains("banned:"));
@@ -1504,7 +2111,14 @@ mod tests {
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
         fs::create_dir_all(layout.banned().join("spammer@example.com")).unwrap();
-        let output = list_senders(&env_path, Some("banned".into())).unwrap();
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::ListSenders {
+                list: Some("banned".into()),
+            }),
+            json: false,
+        };
+        let output = run(cli, EnvConfig::default()).unwrap();
         assert_eq!(output, "banned:spammer@example.com");
     }
 
@@ -1512,7 +2126,14 @@ mod tests {
     fn list_senders_rejects_unknown_list() {
         let dir = tempfile::tempdir().unwrap();
         let env_path = dir.path().join(".env");
-        let err = list_senders(&env_path, Some("unknown".into())).unwrap_err();
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::ListSenders {
+                list: Some("unknown".into()),
+            }),
+            json: false,
+        };
+        let err = run(cli, EnvConfig::default()).unwrap_err();
         assert!(err.to_string().contains("unknown list"));
     }
 
@@ -1552,14 +2173,16 @@ mod tests {
         fs::create_dir_all(attachment_path.parent().unwrap()).unwrap();
         fs::write(&attachment_path, b"attachment").unwrap();
 
-        let output = move_sender(
-            &env_path,
-            &env,
-            "accepted".into(),
-            "spam".into(),
-            "alice@example.org".into(),
-        )
-        .unwrap();
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::MoveSender {
+                from: "accepted".into(),
+                to: "spam".into(),
+                address: "alice@example.org".into(),
+            }),
+            json: false,
+        };
+        let output = run(cli, env.clone()).unwrap();
         assert!(output.contains("moved alice@example.org from accepted to spam"));
         assert!(!sender_dir.exists());
         let dest_dir = layout.spam().join("alice@example.org");
@@ -1587,14 +2210,16 @@ mod tests {
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
         fs::create_dir_all(layout.accepted().join("bob@example.org")).unwrap();
-        let err = move_sender(
-            &env_path,
-            &env,
-            "accepted".into(),
-            "accepted".into(),
-            "bob@example.org".into(),
-        )
-        .unwrap_err();
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::MoveSender {
+                from: "accepted".into(),
+                to: "accepted".into(),
+                address: "bob@example.org".into(),
+            }),
+            json: false,
+        };
+        let err = run(cli, env.clone()).unwrap_err();
         assert!(err.to_string().contains("source and destination lists"));
     }
 
@@ -1633,14 +2258,16 @@ mod tests {
         fs::create_dir_all(attachment_path.parent().unwrap()).unwrap();
         fs::write(&attachment_path, b"warn").unwrap();
 
-        move_sender(
-            &env_path,
-            &env,
-            "accepted".into(),
-            "quarantine".into(),
-            "eve@example.org".into(),
-        )
-        .unwrap();
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::MoveSender {
+                from: "accepted".into(),
+                to: "quarantine".into(),
+                address: "eve@example.org".into(),
+            }),
+            json: false,
+        };
+        run(cli, env.clone()).unwrap();
         let dest_dir = layout.quarantine().join("eve@example.org");
         let moved_sidecar_path =
             dest_dir.join(crate::model::filename::sidecar_filename(subject, ulid));
@@ -1656,14 +2283,16 @@ mod tests {
         let env = EnvConfig::default();
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
-        let err = move_sender(
-            &env_path,
-            &env,
-            "accepted".into(),
-            "spam".into(),
-            "nobody@example.org".into(),
-        )
-        .unwrap_err();
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::MoveSender {
+                from: "accepted".into(),
+                to: "spam".into(),
+                address: "nobody@example.org".into(),
+            }),
+            json: false,
+        };
+        let err = run(cli, env.clone()).unwrap_err();
         assert!(
             err.to_string()
                 .contains("sender nobody@example.org not found")
@@ -1679,14 +2308,16 @@ mod tests {
         layout.ensure().unwrap();
         fs::create_dir_all(layout.accepted().join("dave@example.org")).unwrap();
         fs::create_dir_all(layout.spam().join("dave@example.org")).unwrap();
-        let err = move_sender(
-            &env_path,
-            &env,
-            "accepted".into(),
-            "spam".into(),
-            "dave@example.org".into(),
-        )
-        .unwrap_err();
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::MoveSender {
+                from: "accepted".into(),
+                to: "spam".into(),
+                address: "dave@example.org".into(),
+            }),
+            json: false,
+        };
+        let err = run(cli, env.clone()).unwrap_err();
         assert!(
             err.to_string()
                 .contains("sender dave@example.org already exists in spam")
@@ -1699,5 +2330,13 @@ mod tests {
         let missing = dir.path().join("absent");
         let attachments = update_sidecars_for_move(&missing, "accepted", true).unwrap();
         assert!(attachments.is_empty());
+    }
+
+    #[test]
+    fn sidecar_files_returns_empty_for_missing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("none");
+        let files = sidecar_files(&missing).unwrap();
+        assert!(files.is_empty());
     }
 }

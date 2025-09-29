@@ -17,7 +17,7 @@ use crate::{
     util::logging::{LogLevel, Logger},
 };
 
-use super::watch::{WatchEventKind, WatchList, WatchService};
+use super::watch::{WatchEvent, WatchEventKind, WatchList, WatchService};
 
 pub struct DaemonHandles {
     watch: Option<WatchService>,
@@ -72,36 +72,13 @@ pub fn start_with_transport(
     let watch_pipeline = pipeline.clone();
     let watch_logger = logger.clone();
     let watch = WatchService::spawn(&layout, move |event| {
-        let kind = event.kind.clone();
-        match (event.list, kind) {
-            (WatchList::Outbox, WatchEventKind::Created)
-            | (WatchList::Outbox, WatchEventKind::Modified) => {
-                if let Err(err) = watch_pipeline.dispatch_pending() {
-                    let _ = pipeline_logger.log(
-                        LogLevel::Minimal,
-                        "daemon.outbox.error",
-                        Some(&err.to_string()),
-                    );
-                }
-            }
-            (WatchList::Quarantine, WatchEventKind::Created) => {
-                let detail = format!("path={}", event.path.display());
-                let _ = watch_logger.log(LogLevel::Minimal, "daemon.quarantine", Some(&detail));
-            }
-            (WatchList::Quarantine, WatchEventKind::Modified) => {
-                let detail = format!("path={}", event.path.display());
-                let _ = watch_logger.log(
-                    LogLevel::VerboseSanitized,
-                    "daemon.quarantine.update",
-                    Some(&detail),
-                );
-            }
-            (WatchList::Quarantine, WatchEventKind::Error(msg))
-            | (WatchList::Outbox, WatchEventKind::Error(msg)) => {
-                let _ = watch_logger.log(LogLevel::Minimal, "daemon.watch.error", Some(&msg));
-            }
-            _ => {}
-        }
+        let pipeline_for_event = watch_pipeline.clone();
+        handle_watch_event(
+            event,
+            move || pipeline_for_event.dispatch_pending().map(|_| ()),
+            &pipeline_logger,
+            &watch_logger,
+        );
     })?;
 
     let retention_shutdown = shutdown.clone();
@@ -147,12 +124,56 @@ pub fn start_with_transport(
     })
 }
 
+fn handle_watch_event<F>(
+    event: WatchEvent,
+    dispatch: F,
+    pipeline_logger: &Logger,
+    watch_logger: &Logger,
+) where
+    F: FnOnce() -> Result<()>,
+{
+    let kind = event.kind.clone();
+    match (event.list, kind) {
+        (WatchList::Outbox, WatchEventKind::Created)
+        | (WatchList::Outbox, WatchEventKind::Modified) => {
+            if let Err(err) = dispatch() {
+                let _ = pipeline_logger.log(
+                    LogLevel::Minimal,
+                    "daemon.outbox.error",
+                    Some(&err.to_string()),
+                );
+            }
+        }
+        (WatchList::Quarantine, WatchEventKind::Created) => {
+            let detail = format!("path={}", event.path.display());
+            let _ = watch_logger.log(LogLevel::Minimal, "daemon.quarantine", Some(&detail));
+        }
+        (WatchList::Quarantine, WatchEventKind::Modified) => {
+            let detail = format!("path={}", event.path.display());
+            let _ = watch_logger.log(
+                LogLevel::VerboseSanitized,
+                "daemon.quarantine.update",
+                Some(&detail),
+            );
+        }
+        (WatchList::Quarantine, WatchEventKind::Error(msg))
+        | (WatchList::Outbox, WatchEventKind::Error(msg)) => {
+            let _ = watch_logger.log(LogLevel::Minimal, "daemon.watch.error", Some(&msg));
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{filename::outbox_message_filename, message::MessageSidecar};
     use serial_test::serial;
-    use std::time::Instant;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::time::{Duration, Instant};
 
     #[test]
     fn start_triggers_outbox_dispatch() {
@@ -214,7 +235,7 @@ mod tests {
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
         let env = EnvConfig::default();
-        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+        let logger = Logger::new(layout.root(), LogLevel::VerboseSanitized).unwrap();
         let sidecar_path = layout.outbox().join("broken.yml");
         std::fs::write(&sidecar_path, "{ invalid").unwrap();
 
@@ -236,7 +257,7 @@ mod tests {
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
         let env = EnvConfig::default();
-        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+        let logger = Logger::new(layout.root(), LogLevel::VerboseSanitized).unwrap();
 
         let rules_path = layout.root().join("accepted/.rules");
         std::fs::create_dir_all(rules_path.parent().unwrap()).unwrap();
@@ -279,11 +300,174 @@ mod tests {
         );
     }
 
+    #[test]
+    #[serial]
+    fn retention_removes_expired_messages() {
+        use crate::model::{
+            filename::{html_filename, message_filename, sidecar_filename},
+            message::{HeadersCache, MessageSidecar},
+        };
+        use crate::util::ulid;
+        use time::Duration as TimeDuration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+
+        // Configure accepted list to prune aggressively.
+        std::fs::write(layout.accepted().join(".settings"), "delete_after=1d\n").unwrap();
+
+        // Seed an expired message sidecar and related files.
+        let sender_dir = layout.accepted().join("alice@example.org");
+        std::fs::create_dir_all(&sender_dir).unwrap();
+        let ulid = ulid::generate();
+        let subject = "Expired message";
+        let message_name = message_filename(subject, &ulid);
+        let html_name = html_filename(subject, &ulid);
+        let sidecar_name = sidecar_filename(subject, &ulid);
+        let message_path = sender_dir.join(&message_name);
+        std::fs::write(&message_path, b"body").unwrap();
+        std::fs::write(sender_dir.join(&html_name), "<p>body</p>").unwrap();
+        let mut sidecar = MessageSidecar::new(
+            &ulid,
+            message_name.clone(),
+            "accepted",
+            "strict",
+            html_name.clone(),
+            "hash",
+            HeadersCache::new("Alice", subject),
+        );
+        sidecar.last_activity = (OffsetDateTime::now_utc() - TimeDuration::days(400))
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let yaml = serde_yaml::to_string(&sidecar).unwrap();
+        std::fs::write(sender_dir.join(&sidecar_name), yaml).unwrap();
+
+        let env = EnvConfig::default();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+        let handles = start(layout.clone(), env, logger.clone()).unwrap();
+
+        // Allow the retention worker to run once and then shut it down.
+        std::thread::sleep(Duration::from_millis(250));
+        handles.stop();
+
+        assert!(
+            !message_path.exists(),
+            "expired message should be pruned by retention"
+        );
+        assert!(
+            !sender_dir.join(&sidecar_name).exists(),
+            "sidecar should be removed alongside the message"
+        );
+    }
+
     struct SucceedingTransport;
 
     impl MailTransport for SucceedingTransport {
         fn send(&self, _message: &[u8], _sidecar: &MessageSidecar) -> Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn handle_watch_event_dispatch_success_invokes_closure() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+        let counter = Arc::new(AtomicUsize::new(0));
+        let dispatch_counter = counter.clone();
+        handle_watch_event(
+            WatchEvent {
+                list: WatchList::Outbox,
+                path: layout.outbox(),
+                kind: WatchEventKind::Created,
+            },
+            move || {
+                dispatch_counter.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+            &logger,
+            &logger,
+        );
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn handle_watch_event_dispatch_error_is_logged() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+        handle_watch_event(
+            WatchEvent {
+                list: WatchList::Outbox,
+                path: layout.outbox(),
+                kind: WatchEventKind::Modified,
+            },
+            || Err(anyhow::anyhow!("boom")),
+            &logger,
+            &logger,
+        );
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.message == "daemon.outbox.error")
+        );
+    }
+
+    #[test]
+    fn handle_watch_event_quarantine_variants_are_logged() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let logger = Logger::new(layout.root(), LogLevel::VerboseSanitized).unwrap();
+        handle_watch_event(
+            WatchEvent {
+                list: WatchList::Quarantine,
+                path: layout.quarantine(),
+                kind: WatchEventKind::Created,
+            },
+            || Ok(()),
+            &logger,
+            &logger,
+        );
+        handle_watch_event(
+            WatchEvent {
+                list: WatchList::Quarantine,
+                path: layout.quarantine(),
+                kind: WatchEventKind::Modified,
+            },
+            || Ok(()),
+            &logger,
+            &logger,
+        );
+        handle_watch_event(
+            WatchEvent {
+                list: WatchList::Quarantine,
+                path: layout.quarantine(),
+                kind: WatchEventKind::Error("oops".into()),
+            },
+            || Ok(()),
+            &logger,
+            &logger,
+        );
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.message == "daemon.quarantine")
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.message == "daemon.quarantine.update")
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.message == "daemon.watch.error")
+        );
     }
 }

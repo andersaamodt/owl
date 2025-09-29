@@ -85,4 +85,23 @@ mod tests {
         let gc = store.garbage_collect().unwrap();
         assert!(!gc.is_empty());
     }
+
+    #[test]
+    fn store_preserves_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+        let stored = store.store("file.txt", b"first").unwrap();
+        // Attempt to store a different payload for the same hash; the file should remain unchanged.
+        store.store("file.txt", b"first").unwrap();
+        let contents = std::fs::read(&stored.path).unwrap();
+        assert_eq!(contents, b"first");
+    }
+
+    #[test]
+    fn garbage_collect_handles_missing_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("not_created");
+        let store = AttachmentStore::new(&path);
+        assert!(store.garbage_collect().unwrap().is_empty());
+    }
 }

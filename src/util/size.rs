@@ -78,4 +78,18 @@ mod tests {
         assert!(parse_size("abc").is_err());
         assert!(parse_size("1TB").is_err());
     }
+
+    #[test]
+    fn overflows_on_large_values() {
+        let huge = format!("{}K", u64::MAX);
+        let err = parse_size(&huge).unwrap_err();
+        assert!(err.to_string().contains("overflow"));
+    }
+
+    #[test]
+    fn reports_invalid_number_context() {
+        let too_big = (u64::MAX as u128 + 1).to_string();
+        let err = parse_size(&too_big).unwrap_err();
+        assert!(err.to_string().contains("invalid size value"));
+    }
 }

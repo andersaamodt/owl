@@ -209,6 +209,32 @@ mod tests {
     }
 
     #[test]
+    fn extract_header_stops_on_blank_lines() {
+        let raw = "Subject: hi\r\n\r\nX-Test: value\r\n";
+        assert_eq!(
+            extract_header(raw, "subject"),
+            Some("Subject: hi\r\n".into())
+        );
+        // After the blank line the capture should stop so the next header is ignored.
+        assert_eq!(extract_header(raw, "x-test"), None);
+    }
+
+    #[test]
+    fn extract_header_handles_whitespace_only_lines() {
+        let raw = "Subject: hi\r\n\tcontinuation\r\n   \r\nNext: value\r\n";
+        assert_eq!(
+            extract_header(raw, "subject"),
+            Some("Subject: hi\r\n\tcontinuation\r\n   \r\n".into())
+        );
+        assert_eq!(extract_header(raw, "next"), Some("Next: value\r\n".into()));
+    }
+
+    #[test]
+    fn canonicalize_body_for_empty_input() {
+        assert_eq!(canonicalize_body_simple(b""), b"\r\n".to_vec());
+    }
+
+    #[test]
     fn canonicalize_body_trims_trailing_lines() {
         let body = b"hello\r\nworld\r\n\r\n";
         let canonical = canonicalize_body_simple(body);

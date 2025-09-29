@@ -340,4 +340,190 @@ mod tests {
         let contents = std::fs::read_to_string(&chrony).unwrap();
         assert_eq!(contents, "marker");
     }
+
+    fn write_exec(dir: &tempfile::TempDir, name: &str, body: &str) {
+        let path = dir.path().join(name);
+        std::fs::write(&path, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&path, perms).unwrap();
+        }
+    }
+
+    fn with_path_override<T>(dir: &tempfile::TempDir, f: impl FnOnce() -> T) -> T {
+        let original = std::env::var_os("PATH");
+        let mut new_path = std::ffi::OsString::from(dir.path());
+        if let Some(ref orig) = original {
+            new_path.push(":");
+            new_path.push(orig);
+        }
+        unsafe { std::env::set_var("PATH", &new_path) };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        match original {
+            Some(path) => unsafe { std::env::set_var("PATH", path) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+        result.expect("path override panicked")
+    }
+
+    #[test]
+    #[serial]
+    fn enable_rspamd_logs_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+        write_exec(&dir, "systemctl", "#!/bin/sh\nexit 0\n");
+        write_exec(&dir, "rspamadm", "#!/bin/sh\nexit 1\n");
+        with_path_override(&dir, || enable_rspamd(&logger).unwrap_err());
+        write_exec(&dir, "rspamadm", "#!/bin/sh\nexit 0\n");
+        write_exec(
+            &dir,
+            "systemctl",
+            "#!/bin/sh\nif [ \"$1\" = \"enable\" ]; then exit 1; fi\nexit 0\n",
+        );
+        with_path_override(&dir, || enable_rspamd(&logger).unwrap_err());
+        write_exec(
+            &dir,
+            "systemctl",
+            "#!/bin/sh\nif [ \"$1\" = \"restart\" ]; then exit 1; fi\nexit 0\n",
+        );
+        with_path_override(&dir, || enable_rspamd(&logger).unwrap_err());
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.message == "install.ops.rspamd.error")
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.message == "install.ops.rspamd.enable_error")
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.message == "install.ops.rspamd.restart_error")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn with_path_override_restores_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = std::env::var_os("PATH");
+        unsafe { std::env::remove_var("PATH") };
+        write_exec(&dir, "noop", "#!/bin/sh\nexit 0\n");
+        let seen = with_path_override(&dir, || std::env::var_os("PATH").is_some());
+        assert!(seen);
+        assert!(std::env::var_os("PATH").is_none());
+        match original {
+            Some(path) => unsafe { std::env::set_var("PATH", path) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn reload_postfix_logs_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        write_exec(&dir, "systemctl", "#!/bin/sh\nexit 1\n");
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+        with_path_override(&dir, || {
+            reload_postfix(&logger).unwrap_err();
+        });
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.message == "install.ops.postfix.error")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn sync_chrony_logs_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        write_exec(&dir, "chronyc", "#!/bin/sh\nexit 1\n");
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+        with_path_override(&dir, || {
+            sync_chrony(&logger).unwrap_err();
+        });
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.message == "install.ops.chrony.error")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn run_certbot_logs_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        write_exec(&dir, "certbot", "#!/bin/sh\nexit 1\n");
+        let env = EnvConfig::default();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+        with_path_override(&dir, || {
+            run_certbot(&layout, &env, &logger).unwrap_err();
+        });
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.message == "install.ops.certbot.error")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn run_certbot_uses_domain_without_smtp_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+
+        let env = EnvConfig {
+            letsencrypt_method: "dns".into(),
+            smtp_host: Some("smtp.example.com".into()),
+            ..EnvConfig::default()
+        };
+        create_letsencrypt_docs(&layout, &env).unwrap();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+
+        let args_log = dir.path().join("certbot-args.log");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"{}\"\n",
+            args_log.display()
+        );
+        write_exec(&dir, "certbot", &script);
+
+        with_path_override(&dir, || {
+            run_certbot(&layout, &env, &logger).unwrap();
+        });
+
+        let contents = std::fs::read_to_string(&args_log).unwrap();
+        assert!(contents.contains("--email"));
+        assert!(contents.contains("postmaster@example.com"));
+        assert!(contents.contains("-d"));
+        assert!(contents.contains("smtp.example.com"));
+        assert!(!contents.contains("--preferred-challenges"));
+
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(entries.iter().any(|e| e.message == "install.ops.certbot"));
+        assert!(entries.iter().any(|e| {
+            e.detail
+                .as_deref()
+                .map(|detail| detail.contains("domain=smtp.example.com"))
+                .unwrap_or(false)
+        }));
+    }
 }

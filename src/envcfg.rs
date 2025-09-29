@@ -196,6 +196,12 @@ mod tests {
     }
 
     #[test]
+    fn parse_ignores_comments_and_blanks() {
+        let cfg: EnvConfig = "# comment\n\nlogging=verbose_full\n".parse().unwrap();
+        assert_eq!(cfg.logging, "verbose_full");
+    }
+
+    #[test]
     fn parse_custom() {
         let cfg: EnvConfig = "keep_plus_tags=true\nretry_backoff=1m,2m\n"
             .parse()
@@ -250,5 +256,21 @@ mod tests {
         assert!(rendered.contains("keep_plus_tags=true"));
         assert!(rendered.contains("smtp_host="));
         assert!(rendered.contains("smtp_port="));
+    }
+
+    #[test]
+    fn from_file_missing_reports_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.env");
+        let err = EnvConfig::from_file(&path).unwrap_err();
+        assert!(err.to_string().contains("reading"));
+    }
+
+    #[test]
+    fn to_env_string_defaults_missing_host() {
+        let mut cfg = EnvConfig::default();
+        cfg.smtp_host = None;
+        let env = cfg.to_env_string();
+        assert!(env.contains("smtp_host=127.0.0.1"));
     }
 }
