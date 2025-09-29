@@ -75,6 +75,12 @@ mod tests {
     }
 
     #[test]
+    fn parse_skips_comments_and_blanks() {
+        let settings = ListSettings::parse("# comment\n\nbody_format=html\n").unwrap();
+        assert_eq!(settings.body_format, "html");
+    }
+
+    #[test]
     fn parse_all_keys() {
         let settings = ListSettings::parse(
             "reply_to=list@example.org\nsignature=~/sig.txt\nbody_format=html\nlist_status=banned\ndelete_after=30d",

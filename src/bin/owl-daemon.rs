@@ -101,8 +101,10 @@ where
 mod tests {
     use super::*;
     use serial_test::serial;
+    use std::path::Path;
     use std::sync::Arc;
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
     use tempfile::tempdir;
 
     #[test]
@@ -152,6 +154,83 @@ mod tests {
         .unwrap();
 
         let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.message == "daemon.shutdown")
+        );
+    }
+
+    #[test]
+    fn cli_parses_once_flag() {
+        let cli = DaemonCli::parse_from(["owl-daemon", "--env", "/var/mail/.env", "--once"]);
+        assert!(cli.once);
+        assert_eq!(cli.env, "/var/mail/.env");
+    }
+
+    #[test]
+    fn mail_root_defaults_to_current_directory_when_parent_empty() {
+        let root = mail_root(Path::new("standalone.env"));
+        assert_eq!(root, PathBuf::from("."));
+    }
+
+    #[test]
+    fn mail_root_uses_parent_directory() {
+        let root = mail_root(Path::new("/srv/mail/.env"));
+        assert_eq!(root, PathBuf::from("/srv/mail"));
+    }
+
+    #[test]
+    #[serial]
+    fn run_until_shutdown_returns_immediately_when_flag_set() {
+        let dir = tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let env = EnvConfig::default();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+        let handles = service::start(layout.clone(), env, logger.clone()).unwrap();
+
+        let flag = Arc::new(AtomicBool::new(true));
+        let sleep_count = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&sleep_count);
+
+        run_until_shutdown(handles, logger.clone(), flag, move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        })
+        .unwrap();
+
+        assert_eq!(sleep_count.load(Ordering::SeqCst), 0);
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.message == "daemon.shutdown")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn execute_stops_when_signal_received() {
+        let dir = tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        std::fs::write(&env_path, "logging=minimal\n").unwrap();
+        let cli = DaemonCli {
+            env: env_path.to_string_lossy().into(),
+            once: false,
+        };
+
+        let handle = std::thread::spawn(move || execute(&cli));
+        std::thread::sleep(Duration::from_millis(200));
+        unsafe {
+            libc::raise(libc::SIGTERM);
+        }
+        let result = handle.join().unwrap();
+        result.unwrap();
+
+        let root = mail_root(env_path.as_path());
+        let layout = MailLayout::new(&root);
+        let log_path = layout.root().join("logs/owl.log");
+        let entries = Logger::load_entries(&log_path).unwrap();
         assert!(
             entries
                 .iter()

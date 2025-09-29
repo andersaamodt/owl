@@ -13,4 +13,9 @@ mod tests {
         let domain = to_ascii("müller.de").unwrap();
         assert_eq!(domain, "xn--mller-kva.de");
     }
+
+    #[test]
+    fn rejects_invalid_domain() {
+        assert!(to_ascii("exa\u{80}.com").is_err());
+    }
 }

@@ -106,6 +106,13 @@ mod tests {
     }
 
     #[test]
+    fn domain_suffix_trims_leading_dot() {
+        let rule = Rule::parse("@.Example.Org").unwrap();
+        let addr = Address::parse("user@example.org", false).unwrap();
+        assert!(rule.matches(&addr));
+    }
+
+    #[test]
     fn ruleset_evaluates_in_order() {
         let data = "@example.org\ncarol@example.org";
         let set: RuleSet = data.parse().unwrap();
@@ -138,6 +145,12 @@ mod tests {
         let rule = Rule::Regex("[".into());
         let addr = Address::parse("carol@example.org", false).unwrap();
         assert!(!rule.matches(&addr));
+    }
+
+    #[test]
+    fn parse_invalid_regex_errors() {
+        let err = Rule::parse("/[/").unwrap_err();
+        assert!(err.to_string().contains("invalid regex"));
     }
 
     #[test]

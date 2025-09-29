@@ -76,6 +76,11 @@ mod tests {
         assert!(Address::parse("invalid", false).is_err());
     }
 
+    #[test]
+    fn invalid_domain_reports_idna_error() {
+        assert!(Address::parse("user@exa\u{80}.org", false).is_err());
+    }
+
     proptest! {
         #[test]
         fn canonicalization_is_idempotent(local in "[a-z0-9]{1,6}", domain in "[a-z]{1,6}\\.com") {

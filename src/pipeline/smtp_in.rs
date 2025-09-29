@@ -527,4 +527,28 @@ mod tests {
             assert!(err.to_string().contains("limit"));
         });
     }
+
+    #[test]
+    #[serial]
+    fn with_fake_sanitizer_restores_missing_path() {
+        let original = std::env::var_os("PATH");
+        unsafe { std::env::remove_var("PATH") };
+        with_fake_sanitizer("#!/bin/sh\ncat\n", || {
+            assert!(std::env::var_os("PATH").is_some());
+        });
+        assert!(std::env::var_os("PATH").is_none());
+        match original {
+            Some(path) => unsafe { std::env::set_var("PATH", path) },
+            None => {}
+        }
+    }
+
+    #[test]
+    fn plaintext_to_html_escapes_crlf() {
+        let rendered = plaintext_to_html("Line 1\r\nLine 2\rLine 3");
+        assert!(rendered.contains("Line 1"));
+        assert!(rendered.contains("Line 2"));
+        assert!(rendered.contains("Line 3"));
+        assert!(!rendered.contains("\r"));
+    }
 }

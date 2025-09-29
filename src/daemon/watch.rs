@@ -9,6 +9,60 @@ use notify::{Config, EventKind, PollWatcher, RecommendedWatcher, RecursiveMode, 
 
 use crate::fsops::layout::MailLayout;
 
+#[cfg(test)]
+mod test_flags {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static FORCE_RECOMMENDED_FAILURE: AtomicBool = AtomicBool::new(false);
+    static FORCE_WATCH_FAILURE: AtomicBool = AtomicBool::new(false);
+
+    pub struct RecommendedFailureGuard;
+
+    impl RecommendedFailureGuard {
+        pub fn new() -> Self {
+            FORCE_RECOMMENDED_FAILURE.store(true, Ordering::SeqCst);
+            Self
+        }
+    }
+
+    impl Drop for RecommendedFailureGuard {
+        fn drop(&mut self) {
+            FORCE_RECOMMENDED_FAILURE.store(false, Ordering::SeqCst);
+        }
+    }
+
+    pub struct WatchFailureGuard;
+
+    impl WatchFailureGuard {
+        pub fn new() -> Self {
+            FORCE_WATCH_FAILURE.store(true, Ordering::SeqCst);
+            Self
+        }
+    }
+
+    impl Drop for WatchFailureGuard {
+        fn drop(&mut self) {
+            FORCE_WATCH_FAILURE.store(false, Ordering::SeqCst);
+        }
+    }
+
+    pub fn force_recommended_failure() -> RecommendedFailureGuard {
+        RecommendedFailureGuard::new()
+    }
+
+    pub fn force_watch_failure() -> WatchFailureGuard {
+        WatchFailureGuard::new()
+    }
+
+    pub fn take_recommended_failure() -> bool {
+        FORCE_RECOMMENDED_FAILURE.swap(false, Ordering::SeqCst)
+    }
+
+    pub fn take_watch_failure() -> bool {
+        FORCE_WATCH_FAILURE.swap(false, Ordering::SeqCst)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WatchList {
     Quarantine,
@@ -91,21 +145,40 @@ fn watch_loop(
     let config = Config::default().with_poll_interval(Duration::from_millis(200));
     let mut watchers: Vec<Box<dyn Watcher + Send>> = Vec::new();
 
-    match RecommendedWatcher::new(
+    let forced_recommended_failure = {
+        #[cfg(test)]
         {
-            let sender = tx.clone();
-            move |res| {
-                let _ = sender.send(res);
-            }
-        },
-        config,
-    ) {
-        Ok(watcher) => watchers.push(Box::new(watcher)),
-        Err(err) => handler(WatchEvent {
+            test_flags::take_recommended_failure()
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    };
+
+    if forced_recommended_failure {
+        handler(WatchEvent {
             list,
             path: path.clone(),
-            kind: WatchEventKind::Error(format!("recommended watcher failed: {err}")),
-        }),
+            kind: WatchEventKind::Error("recommended watcher failed: forced for test".to_string()),
+        });
+    } else {
+        match RecommendedWatcher::new(
+            {
+                let sender = tx.clone();
+                move |res| {
+                    let _ = sender.send(res);
+                }
+            },
+            config,
+        ) {
+            Ok(watcher) => watchers.push(Box::new(watcher)),
+            Err(err) => handler(WatchEvent {
+                list,
+                path: path.clone(),
+                kind: WatchEventKind::Error(format!("recommended watcher failed: {err}")),
+            }),
+        }
     }
 
     let poll = PollWatcher::new(
@@ -120,6 +193,16 @@ fn watch_loop(
     watchers.push(Box::new(poll));
 
     for watcher in watchers.iter_mut() {
+        #[cfg(test)]
+        if test_flags::take_watch_failure() {
+            handler(WatchEvent {
+                list,
+                path: path.clone(),
+                kind: WatchEventKind::Error("watch failed: forced for test".into()),
+            });
+            continue;
+        }
+
         if let Err(err) = watcher.watch(&path, RecursiveMode::Recursive) {
             handler(WatchEvent {
                 list,
@@ -130,19 +213,37 @@ fn watch_loop(
     }
 
     while !shutdown.load(Ordering::Relaxed) {
-        match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(Ok(event)) => dispatch_event(list, &handler, event),
-            Ok(Err(err)) => handler(WatchEvent {
-                list,
-                path: path.clone(),
-                kind: WatchEventKind::Error(err.to_string()),
-            }),
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        let result = rx.recv_timeout(Duration::from_millis(200));
+        if !handle_received_event(list, &handler, &path, result) {
+            break;
         }
     }
 
     Ok(())
+}
+
+fn handle_received_event(
+    list: WatchList,
+    handler: &Handler,
+    path: &std::path::Path,
+    result: Result<Result<notify::Event, notify::Error>, mpsc::RecvTimeoutError>,
+) -> bool {
+    match result {
+        Ok(Ok(event)) => {
+            dispatch_event(list, handler, event);
+            true
+        }
+        Ok(Err(err)) => {
+            handler(WatchEvent {
+                list,
+                path: path.to_path_buf(),
+                kind: WatchEventKind::Error(err.to_string()),
+            });
+            true
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => true,
+        Err(mpsc::RecvTimeoutError::Disconnected) => false,
+    }
 }
 
 fn dispatch_event(list: WatchList, handler: &Handler, event: notify::Event) {
@@ -180,7 +281,11 @@ fn classify_event(kind: &EventKind) -> Option<WatchEventKind> {
 mod tests {
     use super::*;
     use crate::fsops::layout::MailLayout;
-    use std::sync::mpsc;
+    use notify::event::{AccessKind, CreateKind, DataChange, MetadataKind, ModifyKind, RemoveKind};
+    use notify::{Error as NotifyError, Event, EventKind};
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex, mpsc};
     use std::time::Duration;
 
     #[test]
@@ -233,6 +338,185 @@ mod tests {
             event.kind,
             WatchEventKind::Created | WatchEventKind::Modified
         ));
+    }
+
+    #[test]
+    fn classify_event_covers_all_variants() {
+        assert_eq!(
+            classify_event(&EventKind::Create(CreateKind::File)),
+            Some(WatchEventKind::Created)
+        );
+        assert_eq!(
+            classify_event(&EventKind::Modify(ModifyKind::Data(DataChange::Content))),
+            Some(WatchEventKind::Modified)
+        );
+        assert_eq!(
+            classify_event(&EventKind::Modify(ModifyKind::Metadata(
+                MetadataKind::Permissions
+            ))),
+            Some(WatchEventKind::Modified)
+        );
+        assert_eq!(
+            classify_event(&EventKind::Remove(RemoveKind::Folder)),
+            Some(WatchEventKind::Removed)
+        );
+        assert!(classify_event(&EventKind::Create(CreateKind::Other)).is_none());
+        assert!(classify_event(&EventKind::Access(AccessKind::Any)).is_none());
+    }
+
+    #[test]
+    fn dispatch_event_emits_for_each_path() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handler: Handler = {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |event: WatchEvent| {
+                seen.lock().unwrap().push(event);
+            })
+        };
+        let event = notify::Event {
+            kind: EventKind::Remove(RemoveKind::File),
+            paths: vec![PathBuf::from("a"), PathBuf::from("b")],
+            attrs: Default::default(),
+        };
+        dispatch_event(WatchList::Outbox, &handler, event);
+        let events = seen.lock().unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|e| e.kind == WatchEventKind::Removed));
+        assert!(events.iter().any(|e| e.path.ends_with("a")));
+        assert!(events.iter().any(|e| e.path.ends_with("b")));
+    }
+
+    #[test]
+    fn dispatch_event_ignores_unclassified() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handler: Handler = {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |event: WatchEvent| {
+                seen.lock().unwrap().push(event);
+            })
+        };
+        let event = notify::Event {
+            kind: EventKind::Create(CreateKind::Other),
+            paths: vec![PathBuf::from("ignored")],
+            attrs: Default::default(),
+        };
+        dispatch_event(WatchList::Quarantine, &handler, event);
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn watch_loop_reports_recommended_watcher_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handler: Handler = {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |event| {
+                seen.lock().unwrap().push(event);
+            })
+        };
+
+        let _guard = super::test_flags::force_recommended_failure();
+        let shutdown = Arc::new(AtomicBool::new(true));
+        watch_loop(WatchList::Outbox, layout.outbox(), handler, shutdown).unwrap();
+
+        let events = seen.lock().unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event.kind,
+            WatchEventKind::Error(ref msg) if msg.contains("recommended watcher failed")
+        )));
+    }
+
+    #[test]
+    fn watch_loop_reports_watch_registration_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handler: Handler = {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |event| {
+                seen.lock().unwrap().push(event);
+            })
+        };
+
+        let _guard = super::test_flags::force_watch_failure();
+        let shutdown = Arc::new(AtomicBool::new(true));
+        watch_loop(
+            WatchList::Quarantine,
+            layout.quarantine(),
+            handler,
+            shutdown,
+        )
+        .unwrap();
+
+        let events = seen.lock().unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event.kind,
+            WatchEventKind::Error(ref msg) if msg.contains("watch failed")
+        )));
+    }
+
+    #[test]
+    fn handle_received_event_dispatches_and_continues() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handler: Handler = {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |event| {
+                seen.lock().unwrap().push(event);
+            })
+        };
+        let event = Event {
+            kind: EventKind::Remove(RemoveKind::File),
+            paths: vec![PathBuf::from("a")],
+            attrs: Default::default(),
+        };
+        let should_continue = handle_received_event(
+            WatchList::Outbox,
+            &handler,
+            std::path::Path::new("ignored"),
+            Ok(Ok(event)),
+        );
+        assert!(should_continue);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn handle_received_event_records_errors() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handler: Handler = {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |event| {
+                seen.lock().unwrap().push(event);
+            })
+        };
+        let should_continue = handle_received_event(
+            WatchList::Quarantine,
+            &handler,
+            std::path::Path::new("ignored"),
+            Ok(Err(NotifyError::generic("boom"))),
+        );
+        assert!(should_continue);
+        let events = seen.lock().unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event.kind,
+            WatchEventKind::Error(ref msg) if msg.contains("boom")
+        )));
+    }
+
+    #[test]
+    fn handle_received_event_breaks_on_disconnect() {
+        let handler: Handler = Arc::new(|_| {});
+        let should_continue = handle_received_event(
+            WatchList::Outbox,
+            &handler,
+            std::path::Path::new("ignored"),
+            Err(mpsc::RecvTimeoutError::Disconnected),
+        );
+        assert!(!should_continue);
     }
 
     fn wait_for_path(rx: &mpsc::Receiver<WatchEvent>, path: &std::path::Path) -> WatchEvent {

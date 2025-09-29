@@ -513,6 +513,7 @@ struct DraftFrontMatter {
 mod tests {
     use super::*;
     use crate::util::logging::{LogLevel, Logger};
+    use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn test_env() -> (tempfile::TempDir, MailLayout, EnvConfig, Logger) {
@@ -536,6 +537,17 @@ mod tests {
     }
 
     #[test]
+    fn parse_retry_schedule_uses_default_when_empty() {
+        let env = EnvConfig {
+            retry_backoff: Vec::new(),
+            ..EnvConfig::default()
+        };
+        let schedule = parse_retry_schedule(&env);
+        assert_eq!(schedule.len(), 1);
+        assert_eq!(schedule[0], Duration::minutes(1));
+    }
+
+    #[test]
     fn next_delay_handles_empty_schedule() {
         let schedule = vec![Duration::seconds(1), Duration::minutes(5)];
         assert_eq!(next_delay(1, &schedule), Duration::seconds(1));
@@ -554,6 +566,24 @@ mod tests {
         let headers = "Subject: Hello\r\n\tWorld\r\n";
         let value = header_value(headers, "subject").unwrap();
         assert_eq!(value, "Hello World");
+    }
+
+    #[test]
+    fn markdown_to_text_formats_lists_and_breaks() {
+        let text = markdown_to_text("- Item 1\n- Item 2\n\nParagraph");
+        assert!(text.contains("- Item 1"));
+        assert!(text.contains("- Item 2"));
+        assert!(text.ends_with("Paragraph"));
+    }
+
+    #[test]
+    fn markdown_to_text_handles_hard_and_soft_breaks() {
+        let text = markdown_to_text("First line  \nSecond line\nThird\n\n* Nested");
+        assert!(text.contains("First line"));
+        assert!(text.contains("Second line"));
+        assert!(text.contains("Third"));
+        assert!(text.contains("- Nested"));
+        assert!(text.contains("Second line\nThird"));
     }
 
     #[test]
@@ -584,6 +614,28 @@ mod tests {
                 .join(outbox_html_filename(&draft_ulid))
                 .exists()
         );
+    }
+
+    #[test]
+    fn queue_draft_includes_reply_to_and_cc() {
+        let (_dir, layout, env, logger) = test_env();
+        let pipeline = OutboxPipeline::new(layout.clone(), env, logger);
+        let draft_ulid = crate::util::ulid::generate();
+        let draft_path = layout.drafts().join(format!("{draft_ulid}.md"));
+        fs::write(
+            &draft_path,
+            "---\nsubject: Follow up\nfrom: Owl <owl@example.org>\nto:\n  - Bob <bob@example.org>\ncc:\n  - Carol <carol@example.org>\nreply_to: Help <help@example.org>\n---\nBody\n",
+        )
+        .unwrap();
+
+        pipeline.queue_draft(&draft_path).unwrap();
+        let sidecar_path = layout.outbox().join(outbox_sidecar_filename(&draft_ulid));
+        let sidecar: MessageSidecar =
+            serde_yaml::from_str(&fs::read_to_string(sidecar_path).unwrap()).unwrap();
+        assert_eq!(sidecar.headers_cache.cc.len(), 1);
+        let message =
+            fs::read_to_string(layout.outbox().join(outbox_message_filename(&draft_ulid))).unwrap();
+        assert!(message.contains("Reply-To: Help <help@example.org>"));
     }
 
     #[test]
@@ -636,6 +688,45 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_pending_returns_empty_without_outbox_dir() {
+        let (_dir, layout, env, logger) = test_env();
+        fs::remove_dir_all(layout.outbox()).unwrap();
+        let pipeline = OutboxPipeline::new(layout, env, logger);
+        let outcomes = pipeline.dispatch_pending().unwrap();
+        assert!(outcomes.is_empty());
+    }
+
+    #[test]
+    fn dispatch_pending_skips_directories_and_non_outbox_entries() {
+        let (_dir, layout, env, logger) = test_env();
+        let pipeline = OutboxPipeline::new(layout.clone(), env, logger);
+        let outbox_dir = layout.outbox();
+        fs::create_dir_all(&outbox_dir).unwrap();
+        fs::create_dir(outbox_dir.join("subdir")).unwrap();
+
+        let mut sidecar = MessageSidecar::new(
+            "01ARZ3NDEKTSV4RRFFQ69G5FB0",
+            "draft.eml",
+            "draft",
+            "strict",
+            "draft.html",
+            "deadbeef",
+            HeadersCache::new("Alice", "Draft"),
+        );
+        sidecar.set_plain_render("draft.txt");
+        let sidecar_path = outbox_dir.join("draft.yml");
+        write_atomic(
+            &sidecar_path,
+            serde_yaml::to_string(&sidecar).unwrap().as_bytes(),
+        )
+        .unwrap();
+
+        let outcomes = pipeline.dispatch_pending().unwrap();
+        assert!(outcomes.is_empty());
+        assert!(sidecar_path.exists());
+    }
+
+    #[test]
     fn finish_dispatch_moves_related_files() {
         let (_dir, layout, mut env, logger) = test_env();
         env.render_mode = "strict".into();
@@ -673,6 +764,79 @@ mod tests {
         assert!(!sidecar_path.exists());
     }
 
+    #[test]
+    fn dispatch_skips_sent_and_future_messages() {
+        let (_dir, layout, env, logger) = test_env();
+        let pipeline = OutboxPipeline::new(layout.clone(), env, logger);
+        let outbox_dir = layout.outbox();
+        fs::create_dir_all(&outbox_dir).unwrap();
+        let sent_sidecar_path = outbox_dir.join("sent.yml");
+        let mut sent_sidecar = MessageSidecar::new(
+            "01ARZ3NDEKTSV4RRFFQ69G5FF0",
+            "sent.eml",
+            "outbox",
+            "strict",
+            "sent.html",
+            "deadbeef",
+            HeadersCache::new("Alice", "Hello"),
+        );
+        sent_sidecar.outbound_state_mut().status = OutboundStatus::Sent;
+        let future_sidecar_path = outbox_dir.join("future.yml");
+        let mut future_sidecar = MessageSidecar::new(
+            "01ARZ3NDEKTSV4RRFFQ69G5FF1",
+            "future.eml",
+            "outbox",
+            "strict",
+            "future.html",
+            "feedface",
+            HeadersCache::new("Bob", "Later"),
+        );
+        future_sidecar.outbound_state_mut().next_attempt_at = Some("2999-01-01T00:00:00Z".into());
+        write_atomic(
+            &sent_sidecar_path,
+            serde_yaml::to_string(&sent_sidecar).unwrap().as_bytes(),
+        )
+        .unwrap();
+        write_atomic(
+            &future_sidecar_path,
+            serde_yaml::to_string(&future_sidecar).unwrap().as_bytes(),
+        )
+        .unwrap();
+        let outcomes = pipeline.dispatch_pending().unwrap();
+        assert!(outcomes.is_empty());
+    }
+
+    #[test]
+    fn dispatch_logs_missing_message_files() {
+        let (_dir, layout, env, _) = test_env();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+        let pipeline = OutboxPipeline::new(layout.clone(), env, logger.clone());
+        let outbox_dir = layout.outbox();
+        fs::create_dir_all(&outbox_dir).unwrap();
+        let sidecar_path = outbox_dir.join("missing.yml");
+        let sidecar = MessageSidecar::new(
+            "01ARZ3NDEKTSV4RRFFQ69G5FF2",
+            "missing.eml",
+            "outbox",
+            "strict",
+            "missing.html",
+            "deadbeef",
+            HeadersCache::new("Alice", "Hello"),
+        );
+        write_atomic(
+            &sidecar_path,
+            serde_yaml::to_string(&sidecar).unwrap().as_bytes(),
+        )
+        .unwrap();
+        pipeline.dispatch_pending().unwrap();
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.message == "outbox.missing_eml")
+        );
+    }
+
     struct RecordingTransport {
         attempts: AtomicUsize,
         fail: bool,
@@ -702,5 +866,118 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    #[test]
+    fn smtp_relay_honours_starttls_and_credentials() {
+        let mut env = EnvConfig::default();
+        env.smtp_starttls = true;
+        env.smtp_host = Some("smtp.example.org".into());
+        env.smtp_username = Some("user".into());
+        env.smtp_password = Some("pass".into());
+        let relay = SmtpRelay::from_env(&env);
+        // Ensure the builder path executes without panic.
+        let _ = format!("{:?}", relay.inner);
+    }
+
+    #[test]
+    fn smtp_relay_without_starttls_uses_dangerous_builder() {
+        let mut env = EnvConfig::default();
+        env.smtp_starttls = false;
+        env.smtp_host = Some("smtp.example.org".into());
+        let relay = SmtpRelay::from_env(&env);
+        let _ = format!("{:?}", relay.inner);
+    }
+
+    #[test]
+    fn draft_from_file_requires_filename_stem() {
+        let err = Draft::from_file(Path::new("")).expect_err("expected missing stem failure");
+        assert!(format!("{err}").contains("missing stem"));
+    }
+
+    #[test]
+    fn draft_from_file_requires_ulid_filenames() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("not-a-ulid.md");
+        fs::write(
+            &path,
+            "---\nsubject: hi\nfrom: alice@example.org\nto:\n  - bob@example.org\n---\nbody\n",
+        )
+        .unwrap();
+        let err = Draft::from_file(&path).expect_err("expected ulid validation failure");
+        assert!(format!("{err}").contains("must be a ULID"));
+    }
+
+    #[test]
+    fn draft_from_file_enforces_recipients_and_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("01ARZ3NDEKTSV4RRFFQ69G5FAV.md");
+        fs::write(&path, "---\nsubject: hi\nto: []\n---\nbody\n").unwrap();
+        let err = Draft::from_file(&path).expect_err("expected recipient failure");
+        assert!(
+            format!("{err}").contains("must include at least one recipient"),
+            "unexpected error: {err}"
+        );
+
+        fs::write(
+            &path,
+            "---\nsubject: hi\nto:\n  - bob@example.org\n---\nbody\n",
+        )
+        .unwrap();
+        let err = Draft::from_file(&path).expect_err("expected missing from failure");
+        assert!(format!("{err}").contains("missing 'from'"));
+    }
+
+    #[test]
+    fn draft_from_file_reports_invalid_reply_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("01ARZ3NDEKTSV4RRFFQ69G5FAW.md");
+        fs::write(
+            &path,
+            "---\nsubject: hi\nfrom: alice@example.org\nto:\n  - bob@example.org\nreply_to: not-an-email\n---\nbody\n",
+        )
+        .unwrap();
+        let err = Draft::from_file(&path).expect_err("expected reply-to parsing failure");
+        assert!(format!("{err}").contains("invalid address"));
+    }
+
+    #[test]
+    fn split_front_matter_validates_delimiters() {
+        let err = split_front_matter("subject: hi\n").expect_err("missing delimiter");
+        assert!(format!("{err}").contains("starting front matter delimiter"));
+
+        let err = split_front_matter("---\nsubject: hi\n").expect_err("missing closing delimiter");
+        assert!(format!("{err}").contains("closing front matter delimiter"));
+    }
+
+    #[test]
+    fn build_envelope_reports_address_errors() {
+        let mut headers = HeadersCache::new("Alice <alice@example.org>", "Hello");
+        headers.from = "invalid".into();
+        headers.to.push("bob@example.org".into());
+        let mut sidecar = MessageSidecar::new(
+            "01ARZ3NDEKTSV4RRFFQ69G5FAX",
+            "message.eml",
+            "outbox",
+            "strict",
+            "message.html",
+            "deadbeef",
+            headers.clone(),
+        );
+        let err = build_envelope(&sidecar).expect_err("expected invalid from");
+        assert!(format!("{err}").contains("invalid from address"));
+
+        let mut headers = headers;
+        headers.from = "Alice <alice@example.org>".into();
+        headers.to = vec!["not-an-email".into()];
+        sidecar.headers_cache = headers.clone();
+        let err = build_envelope(&sidecar).expect_err("expected invalid recipient");
+        assert!(format!("{err}").contains("invalid recipient"));
+
+        headers.to.clear();
+        headers.cc.clear();
+        sidecar.headers_cache = headers;
+        let err = build_envelope(&sidecar).expect_err("expected missing recipients");
+        assert!(format!("{err}").contains("no recipients"));
     }
 }

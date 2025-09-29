@@ -199,9 +199,20 @@ mod tests {
     use super::*;
     use std::fs;
 
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     #[test]
     fn parse_levels() {
         assert_eq!(LogLevel::from_str("off").unwrap(), LogLevel::Off);
+        assert_eq!(
+            LogLevel::from_str("verbose_full").unwrap(),
+            LogLevel::VerboseFull
+        );
+        assert_eq!(
+            LogLevel::from_str("verbose_sanitized").unwrap(),
+            LogLevel::VerboseSanitized
+        );
         assert!(LogLevel::from_str("nope").is_err());
     }
 
@@ -229,6 +240,16 @@ mod tests {
     }
 
     #[test]
+    fn as_str_and_level_round_trip() {
+        assert_eq!(LogLevel::Off.as_str(), "off");
+        assert_eq!(LogLevel::VerboseFull.as_str(), "verbose_full");
+
+        let dir = tempfile::tempdir().unwrap();
+        let logger = Logger::new(dir.path(), LogLevel::VerboseSanitized).unwrap();
+        assert_eq!(logger.level(), LogLevel::VerboseSanitized);
+    }
+
+    #[test]
     fn verbose_filters_respect_threshold() {
         let dir = tempfile::tempdir().unwrap();
         let logger = Logger::new(dir.path(), LogLevel::Minimal).unwrap();
@@ -253,6 +274,69 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn new_logger_sets_strict_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let logger = Logger::new(dir.path(), LogLevel::Minimal).unwrap();
+        let logs_dir = dir.path().join("logs");
+        let dir_mode = fs::metadata(&logs_dir)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(dir_mode, 0o700);
+
+        logger
+            .log(LogLevel::Minimal, "permission.check", None)
+            .unwrap();
+        let file_mode = fs::metadata(logger.log_path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(file_mode, 0o600);
+    }
+
+    #[test]
+    fn logger_reuses_open_file_between_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let logger = Logger::new(dir.path(), LogLevel::Minimal).unwrap();
+        logger.log(LogLevel::Minimal, "first", None).unwrap();
+        logger.log(LogLevel::Minimal, "second", None).unwrap();
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn load_entries_skips_blank_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("owl.log");
+        let mut file = std::fs::File::create(&log_path).unwrap();
+        let entry = LogEntry::new(LogLevel::Minimal, "event", None);
+        let line = serde_json::to_string(&entry).unwrap();
+        use std::io::Write;
+        writeln!(file, "{line}").unwrap();
+        writeln!(file).unwrap();
+        writeln!(file, "   \t  ").unwrap();
+        let entries = Logger::load_entries(&log_path).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].message, "event");
+    }
+
+    #[test]
+    fn format_human_without_detail() {
+        let entry = LogEntry {
+            timestamp: "2024-01-02T03:04:05Z".into(),
+            level: "minimal".into(),
+            message: "noop".into(),
+            detail: None,
+        };
+        let rendered = entry.format_human();
+        assert!(rendered.contains("noop"));
+        assert!(!rendered.contains("::"));
+    }
+
+    #[test]
     fn tail_returns_suffix() {
         let entries = vec![
             LogEntry::new(LogLevel::Minimal, "a", None),
@@ -271,6 +355,16 @@ mod tests {
         let slice = tail(&entries, 5);
         assert_eq!(slice.len(), 1);
         assert_eq!(slice[0].message, "only");
+    }
+
+    #[test]
+    fn tail_handles_zero_max() {
+        let entries = vec![
+            LogEntry::new(LogLevel::Minimal, "a", None),
+            LogEntry::new(LogLevel::Minimal, "b", None),
+        ];
+        let slice = tail(&entries, 0);
+        assert!(slice.is_empty());
     }
 
     #[test]

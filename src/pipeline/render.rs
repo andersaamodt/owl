@@ -87,6 +87,36 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn with_prepended_path_handles_missing_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = std::env::var_os("PATH");
+        unsafe { std::env::remove_var("PATH") };
+        let _ = write_script(&dir, "sanitize-html", "#!/bin/sh\nexec /bin/cat\n");
+        let output = with_prepended_path(&dir, || sanitize_html("<p>ok</p>").unwrap());
+        assert_eq!(output.trim(), "<p>ok</p>");
+        match original {
+            Some(path) => unsafe { std::env::set_var("PATH", path) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn with_prepended_path_sets_empty_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = std::env::var_os("PATH");
+        unsafe { std::env::remove_var("PATH") };
+        let _ = write_script(&dir, "sanitize-html", "#!/bin/sh\nexec /bin/cat\n");
+        with_prepended_path(&dir, || sanitize_html("<p>noop</p>").unwrap());
+        assert_eq!(std::env::var("PATH").unwrap(), "");
+        match original {
+            Some(path) => unsafe { std::env::set_var("PATH", path) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+    }
+
+    #[test]
     fn sanitize_html_failure_bubbles() {
         let dir = tempfile::tempdir().unwrap();
         let script = write_script(&dir, "fail-sanitize", "#!/bin/sh\nexit 2\n");
