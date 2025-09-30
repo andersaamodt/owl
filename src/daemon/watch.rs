@@ -15,6 +15,9 @@ mod test_flags {
 
     static FORCE_RECOMMENDED_FAILURE: AtomicBool = AtomicBool::new(false);
     static FORCE_WATCH_FAILURE: AtomicBool = AtomicBool::new(false);
+    static FORCE_RECOMMENDED_CONSTRUCTOR_ERROR: AtomicBool = AtomicBool::new(false);
+    static FORCE_POLL_WATCHER_ERROR: AtomicBool = AtomicBool::new(false);
+    static FORCE_WATCH_REGISTER_ERROR: AtomicBool = AtomicBool::new(false);
 
     pub struct RecommendedFailureGuard;
 
@@ -31,8 +34,10 @@ mod test_flags {
         }
     }
 
+    #[allow(dead_code)]
     pub struct WatchFailureGuard;
 
+    #[allow(dead_code)]
     impl WatchFailureGuard {
         pub fn new() -> Self {
             FORCE_WATCH_FAILURE.store(true, Ordering::SeqCst);
@@ -40,9 +45,55 @@ mod test_flags {
         }
     }
 
+    #[allow(dead_code)]
     impl Drop for WatchFailureGuard {
         fn drop(&mut self) {
             FORCE_WATCH_FAILURE.store(false, Ordering::SeqCst);
+        }
+    }
+
+    pub struct RecommendedConstructorErrorGuard;
+
+    impl RecommendedConstructorErrorGuard {
+        pub fn new() -> Self {
+            FORCE_RECOMMENDED_CONSTRUCTOR_ERROR.store(true, Ordering::SeqCst);
+            Self
+        }
+    }
+
+    impl Drop for RecommendedConstructorErrorGuard {
+        fn drop(&mut self) {
+            FORCE_RECOMMENDED_CONSTRUCTOR_ERROR.store(false, Ordering::SeqCst);
+        }
+    }
+
+    pub struct PollWatcherErrorGuard;
+
+    impl PollWatcherErrorGuard {
+        pub fn new() -> Self {
+            FORCE_POLL_WATCHER_ERROR.store(true, Ordering::SeqCst);
+            Self
+        }
+    }
+
+    impl Drop for PollWatcherErrorGuard {
+        fn drop(&mut self) {
+            FORCE_POLL_WATCHER_ERROR.store(false, Ordering::SeqCst);
+        }
+    }
+
+    pub struct WatchRegisterErrorGuard;
+
+    impl WatchRegisterErrorGuard {
+        pub fn new() -> Self {
+            FORCE_WATCH_REGISTER_ERROR.store(true, Ordering::SeqCst);
+            Self
+        }
+    }
+
+    impl Drop for WatchRegisterErrorGuard {
+        fn drop(&mut self) {
+            FORCE_WATCH_REGISTER_ERROR.store(false, Ordering::SeqCst);
         }
     }
 
@@ -50,6 +101,7 @@ mod test_flags {
         RecommendedFailureGuard::new()
     }
 
+    #[allow(dead_code)]
     pub fn force_watch_failure() -> WatchFailureGuard {
         WatchFailureGuard::new()
     }
@@ -60,6 +112,30 @@ mod test_flags {
 
     pub fn take_watch_failure() -> bool {
         FORCE_WATCH_FAILURE.swap(false, Ordering::SeqCst)
+    }
+
+    pub fn force_recommended_constructor_error() -> RecommendedConstructorErrorGuard {
+        RecommendedConstructorErrorGuard::new()
+    }
+
+    pub fn take_recommended_constructor_error() -> bool {
+        FORCE_RECOMMENDED_CONSTRUCTOR_ERROR.swap(false, Ordering::SeqCst)
+    }
+
+    pub fn force_poll_watcher_error() -> PollWatcherErrorGuard {
+        PollWatcherErrorGuard::new()
+    }
+
+    pub fn take_poll_watcher_error() -> bool {
+        FORCE_POLL_WATCHER_ERROR.swap(false, Ordering::SeqCst)
+    }
+
+    pub fn force_watch_register_error() -> WatchRegisterErrorGuard {
+        WatchRegisterErrorGuard::new()
+    }
+
+    pub fn take_watch_register_error() -> bool {
+        FORCE_WATCH_REGISTER_ERROR.swap(false, Ordering::SeqCst)
     }
 }
 
@@ -135,6 +211,56 @@ impl Drop for WatchService {
     }
 }
 
+#[allow(dead_code)]
+fn forward_event(
+    sender: &mpsc::Sender<notify::Result<notify::Event>>,
+    res: notify::Result<notify::Event>,
+) {
+    let _ = sender.send(res);
+}
+
+fn make_recommended_watcher(
+    tx: &mpsc::Sender<notify::Result<notify::Event>>,
+    config: Config,
+) -> notify::Result<RecommendedWatcher> {
+    #[cfg(test)]
+    {
+        if test_flags::take_recommended_constructor_error() {
+            return Err(notify::Error::generic(
+                "recommended watcher failed: forced constructor error",
+            ));
+        }
+    }
+    RecommendedWatcher::new(
+        {
+            let sender = tx.clone();
+            move |res| forward_event(&sender, res)
+        },
+        config,
+    )
+}
+
+fn make_poll_watcher(
+    tx: &mpsc::Sender<notify::Result<notify::Event>>,
+    config: Config,
+) -> notify::Result<PollWatcher> {
+    #[cfg(test)]
+    {
+        if test_flags::take_poll_watcher_error() {
+            return Err(notify::Error::generic(
+                "poll watcher failed: forced for test",
+            ));
+        }
+    }
+    PollWatcher::new(
+        {
+            let sender = tx.clone();
+            move |res| forward_event(&sender, res)
+        },
+        config,
+    )
+}
+
 fn watch_loop(
     list: WatchList,
     path: std::path::PathBuf,
@@ -163,15 +289,9 @@ fn watch_loop(
             kind: WatchEventKind::Error("recommended watcher failed: forced for test".to_string()),
         });
     } else {
-        match RecommendedWatcher::new(
-            {
-                let sender = tx.clone();
-                move |res| {
-                    let _ = sender.send(res);
-                }
-            },
-            config,
-        ) {
+        let recommended = make_recommended_watcher(&tx, config);
+
+        match recommended {
             Ok(watcher) => watchers.push(Box::new(watcher)),
             Err(err) => handler(WatchEvent {
                 list,
@@ -181,15 +301,7 @@ fn watch_loop(
         }
     }
 
-    let poll = PollWatcher::new(
-        {
-            let sender = tx.clone();
-            move |res| {
-                let _ = sender.send(res);
-            }
-        },
-        config,
-    )?;
+    let poll = make_poll_watcher(&tx, config)?;
     watchers.push(Box::new(poll));
 
     for watcher in watchers.iter_mut() {
@@ -203,7 +315,24 @@ fn watch_loop(
             continue;
         }
 
-        if let Err(err) = watcher.watch(&path, RecursiveMode::Recursive) {
+        let watch_result = {
+            #[cfg(test)]
+            {
+                if test_flags::take_watch_register_error() {
+                    Err(notify::Error::generic(
+                        "watch registration failed: forced for test",
+                    ))
+                } else {
+                    watcher.watch(&path, RecursiveMode::Recursive)
+                }
+            }
+            #[cfg(not(test))]
+            {
+                watcher.watch(&path, RecursiveMode::Recursive)
+            }
+        };
+
+        if let Err(err) = watch_result {
             handler(WatchEvent {
                 list,
                 path: path.clone(),
@@ -289,6 +418,14 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn forward_event_sends_result() {
+        let (tx, rx) = mpsc::channel();
+        forward_event(&tx, Ok(Event::new(EventKind::Create(CreateKind::File))));
+        let event = rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert!(event.is_ok());
+    }
+
+    #[test]
     fn watcher_emits_quarantine_events() {
         let dir = tempfile::tempdir().unwrap();
         let layout = MailLayout::new(dir.path());
@@ -361,6 +498,7 @@ mod tests {
             Some(WatchEventKind::Removed)
         );
         assert!(classify_event(&EventKind::Create(CreateKind::Other)).is_none());
+        assert!(classify_event(&EventKind::Remove(RemoveKind::Other)).is_none());
         assert!(classify_event(&EventKind::Access(AccessKind::Any)).is_none());
     }
 
@@ -430,6 +568,31 @@ mod tests {
     }
 
     #[test]
+    fn watch_loop_reports_recommended_constructor_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handler: Handler = {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |event| {
+                seen.lock().unwrap().push(event);
+            })
+        };
+
+        let _guard = super::test_flags::force_recommended_constructor_error();
+        let shutdown = Arc::new(AtomicBool::new(true));
+        watch_loop(WatchList::Outbox, layout.outbox(), handler, shutdown).unwrap();
+
+        let events = seen.lock().unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event.kind,
+            WatchEventKind::Error(ref msg) if msg.contains("forced constructor error")
+        )));
+    }
+
+    #[test]
     fn watch_loop_reports_watch_registration_failure() {
         let dir = tempfile::tempdir().unwrap();
         let layout = MailLayout::new(dir.path());
@@ -443,7 +606,7 @@ mod tests {
             })
         };
 
-        let _guard = super::test_flags::force_watch_failure();
+        let _guard = super::test_flags::force_watch_register_error();
         let shutdown = Arc::new(AtomicBool::new(true));
         watch_loop(
             WatchList::Quarantine,
@@ -458,6 +621,53 @@ mod tests {
             event.kind,
             WatchEventKind::Error(ref msg) if msg.contains("watch failed")
         )));
+    }
+
+    #[test]
+    fn watch_loop_reports_forced_watch_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handler: Handler = {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |event| {
+                seen.lock().unwrap().push(event);
+            })
+        };
+
+        let _guard = super::test_flags::force_watch_failure();
+        let shutdown = Arc::new(AtomicBool::new(true));
+        watch_loop(WatchList::Outbox, layout.outbox(), handler, shutdown).unwrap();
+
+        let events = seen.lock().unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event.kind,
+            WatchEventKind::Error(ref msg) if msg.contains("watch failed: forced for test")
+        )));
+    }
+
+    #[test]
+    fn watch_service_reports_poll_watcher_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let _guard = super::test_flags::force_poll_watcher_error();
+        let service = WatchService::spawn(&layout, move |event| {
+            tx.send(event).unwrap();
+        })
+        .unwrap();
+
+        let event = rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("expected poll watcher failure event");
+        assert!(
+            matches!(event.kind, WatchEventKind::Error(ref msg) if msg.contains("poll watcher failed"))
+        );
+        drop(service);
     }
 
     #[test]
