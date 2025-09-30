@@ -3,25 +3,24 @@ use clap::Parser;
 #[cfg(test)]
 use owl::cli::Commands;
 use owl::{
-    cli::{OwlCli, run},
+    cli::{self, OwlCli, run},
     envcfg::EnvConfig,
 };
-use std::path::Path;
 
 fn execute(cli: OwlCli) -> anyhow::Result<()> {
-    let env = if cli.env.is_empty() {
-        EnvConfig::default()
-    } else {
-        let path = Path::new(&cli.env);
-        if path.exists() {
-            EnvConfig::from_file(path)?
-        } else {
-            EnvConfig::default()
-        }
-    };
+    let env = load_env_config(&cli.env)?;
     let output = run(cli.clone(), env)?;
     println!("{output}");
     Ok(())
+}
+
+fn load_env_config(raw: &str) -> anyhow::Result<EnvConfig> {
+    let env_path = cli::resolve_env_path(raw)?;
+    if env_path.exists() {
+        EnvConfig::from_file(&env_path)
+    } else {
+        Ok(EnvConfig::default())
+    }
 }
 
 #[cfg(not(test))]
@@ -66,6 +65,32 @@ mod tests {
             unsafe { std::env::set_var("PATH", orig) };
         }
         result.expect("ops env callback panicked")
+    }
+
+    #[test]
+    #[serial]
+    fn load_env_config_expands_tilde_path() {
+        struct HomeGuard(Option<std::ffi::OsString>);
+
+        impl Drop for HomeGuard {
+            fn drop(&mut self) {
+                if let Some(value) = self.0.take() {
+                    unsafe { std::env::set_var("HOME", value) };
+                } else {
+                    unsafe { std::env::remove_var("HOME") };
+                }
+            }
+        }
+
+        let dir = tempdir().unwrap();
+        let mail_dir = dir.path().join("mail");
+        std::fs::create_dir_all(&mail_dir).unwrap();
+        std::fs::write(mail_dir.join(".env"), "logging=off\n").unwrap();
+        let _guard = HomeGuard(std::env::var_os("HOME"));
+        unsafe { std::env::set_var("HOME", dir.path()) };
+
+        let env = load_env_config("~/mail/.env").unwrap();
+        assert_eq!(env.logging, "off");
     }
 
     #[test]
@@ -117,9 +142,8 @@ mod tests {
         unsafe { std::env::remove_var("PATH") };
         with_fake_ops_env(|| ());
         assert!(std::env::var_os("PATH").is_none());
-        match original {
-            Some(path) => unsafe { std::env::set_var("PATH", path) },
-            None => {}
+        if let Some(path) = original {
+            unsafe { std::env::set_var("PATH", path) };
         }
     }
 
