@@ -26,12 +26,36 @@ struct DaemonCli {
     once: bool,
 }
 
+#[cfg(not(test))]
 fn main() -> Result<()> {
     let cli = DaemonCli::parse();
     execute(&cli)
 }
 
+#[cfg(test)]
+fn main() -> Result<()> {
+    Ok(())
+}
+
 fn execute(cli: &DaemonCli) -> Result<()> {
+    execute_with(cli, register_signals, default_sleep)
+}
+
+fn default_sleep() {
+    thread::sleep(Duration::from_millis(200));
+}
+
+fn register_signals(term_flag: &Arc<AtomicBool>) -> Result<()> {
+    flag::register(SIGINT, Arc::clone(term_flag))?;
+    flag::register(SIGTERM, Arc::clone(term_flag))?;
+    Ok(())
+}
+
+fn execute_with<R, S>(cli: &DaemonCli, register: R, sleeper: S) -> Result<()>
+where
+    R: Fn(&Arc<AtomicBool>) -> Result<()>,
+    S: FnMut(),
+{
     let env_path = PathBuf::from(&cli.env);
     let env = if env_path.exists() {
         EnvConfig::from_file(&env_path)
@@ -59,12 +83,9 @@ fn execute(cli: &DaemonCli) -> Result<()> {
     }
 
     let term_flag = Arc::new(AtomicBool::new(false));
-    flag::register(SIGINT, Arc::clone(&term_flag))?;
-    flag::register(SIGTERM, Arc::clone(&term_flag))?;
+    register(&term_flag)?;
 
-    run_until_shutdown(handles, logger, term_flag, || {
-        thread::sleep(Duration::from_millis(200))
-    })
+    run_until_shutdown(handles, logger, term_flag, sleeper)
 }
 
 fn mail_root(env_path: &Path) -> PathBuf {
@@ -101,10 +122,11 @@ where
 mod tests {
     use super::*;
     use serial_test::serial;
+    use signal_hook::low_level;
     use std::path::Path;
     use std::sync::Arc;
+    use std::sync::OnceLock;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
     use tempfile::tempdir;
 
     #[test]
@@ -128,6 +150,24 @@ mod tests {
             once: true,
         };
         execute(&cli).unwrap();
+    }
+
+    #[test]
+    fn execute_reports_env_load_failures() {
+        let dir = tempdir().unwrap();
+        let env_path = dir.path().join("config-dir");
+        std::fs::create_dir(&env_path).unwrap();
+        let cli = DaemonCli {
+            env: env_path.to_string_lossy().into(),
+            once: true,
+        };
+
+        let err = execute_with(&cli, |_| Ok(()), || {}).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains(&format!("loading {}", env_path.display())),
+            "expected context to include path, got: {message}"
+        );
     }
 
     #[test]
@@ -181,6 +221,31 @@ mod tests {
     }
 
     #[test]
+    fn default_sleep_is_callable() {
+        default_sleep();
+    }
+
+    #[test]
+    #[serial]
+    fn register_signals_sets_flag_for_sigint_and_sigterm() {
+        let flag = Arc::new(AtomicBool::new(false));
+        register_signals(&flag).unwrap();
+
+        low_level::raise(SIGINT).unwrap();
+        assert!(flag.load(Ordering::Relaxed));
+
+        flag.store(false, Ordering::Relaxed);
+
+        low_level::raise(SIGTERM).unwrap();
+        assert!(flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn stub_main_is_callable() {
+        super::main().unwrap();
+    }
+
+    #[test]
     #[serial]
     fn run_until_shutdown_returns_immediately_when_flag_set() {
         let dir = tempdir().unwrap();
@@ -219,13 +284,28 @@ mod tests {
             once: false,
         };
 
-        let handle = std::thread::spawn(move || execute(&cli));
-        std::thread::sleep(Duration::from_millis(200));
-        unsafe {
-            libc::raise(libc::SIGTERM);
-        }
-        let result = handle.join().unwrap();
-        result.unwrap();
+        let flag_holder: Arc<OnceLock<Arc<AtomicBool>>> = Arc::new(OnceLock::new());
+        let register_holder = Arc::clone(&flag_holder);
+
+        execute_with(
+            &cli,
+            move |term_flag| {
+                register_signals(term_flag)?;
+                register_holder
+                    .set(Arc::clone(term_flag))
+                    .map_err(|_| anyhow::anyhow!("term flag already set"))?;
+                Ok(())
+            },
+            {
+                let sleeper_holder = Arc::clone(&flag_holder);
+                move || {
+                    if let Some(flag) = sleeper_holder.get() {
+                        flag.store(true, Ordering::SeqCst);
+                    }
+                }
+            },
+        )
+        .unwrap();
 
         let root = mail_root(env_path.as_path());
         let layout = MailLayout::new(&root);
@@ -236,5 +316,42 @@ mod tests {
                 .iter()
                 .any(|entry| entry.message == "daemon.shutdown")
         );
+    }
+
+    #[test]
+    #[serial]
+    fn execute_registers_signals_and_exits_cleanly() {
+        let dir = tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        std::fs::write(&env_path, "logging=minimal\n").unwrap();
+        let cli = DaemonCli {
+            env: env_path.to_string_lossy().into(),
+            once: false,
+        };
+
+        let flag_holder: Arc<OnceLock<Arc<AtomicBool>>> = Arc::new(OnceLock::new());
+        let register_holder = Arc::clone(&flag_holder);
+        execute_with(
+            &cli,
+            move |term_flag| {
+                register_signals(term_flag)?;
+                register_holder
+                    .set(Arc::clone(term_flag))
+                    .map_err(|_| anyhow::anyhow!("term flag already set"))?;
+                Ok(())
+            },
+            {
+                let sleeper_holder = Arc::clone(&flag_holder);
+                move || {
+                    if let Some(flag) = sleeper_holder.get() {
+                        flag.store(true, Ordering::SeqCst);
+                    }
+                }
+            },
+        )
+        .unwrap();
+
+        let flag = flag_holder.get().expect("term flag should be stored");
+        assert!(flag.load(Ordering::SeqCst));
     }
 }
