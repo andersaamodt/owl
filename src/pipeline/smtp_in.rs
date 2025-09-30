@@ -537,9 +537,8 @@ mod tests {
             assert!(std::env::var_os("PATH").is_some());
         });
         assert!(std::env::var_os("PATH").is_none());
-        match original {
-            Some(path) => unsafe { std::env::set_var("PATH", path) },
-            None => {}
+        if let Some(path) = original {
+            unsafe { std::env::set_var("PATH", path) };
         }
     }
 
