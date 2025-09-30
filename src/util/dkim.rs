@@ -135,12 +135,9 @@ pub fn extract_header(headers_raw: &str, name: &str) -> Option<String> {
     let mut capture = false;
     let target = name.to_ascii_lowercase();
     for line in headers_raw.split_inclusive("\r\n") {
-        if line == "\r\n" {
-            break;
-        }
         let trimmed = line.trim_end_matches("\r\n");
         if trimmed.is_empty() {
-            if capture {
+            if capture || line == "\r\n" {
                 break;
             }
             continue;
@@ -221,6 +218,15 @@ mod tests {
 
     #[test]
     fn extract_header_handles_whitespace_only_lines() {
+        let raw = "Subject: hi\r\n   \r\nX-Test: value\r\n";
+        assert_eq!(
+            extract_header(raw, "subject"),
+            Some("Subject: hi\r\n   \r\n".into())
+        );
+    }
+
+    #[test]
+    fn extract_header_preserves_continuations_before_blank_lines() {
         let raw = "Subject: hi\r\n\tcontinuation\r\n   \r\nNext: value\r\n";
         assert_eq!(
             extract_header(raw, "subject"),
