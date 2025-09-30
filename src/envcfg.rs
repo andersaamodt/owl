@@ -268,8 +268,10 @@ mod tests {
 
     #[test]
     fn to_env_string_defaults_missing_host() {
-        let mut cfg = EnvConfig::default();
-        cfg.smtp_host = None;
+        let cfg = EnvConfig {
+            smtp_host: None,
+            ..EnvConfig::default()
+        };
         let env = cfg.to_env_string();
         assert!(env.contains("smtp_host=127.0.0.1"));
     }
