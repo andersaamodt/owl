@@ -19,6 +19,36 @@ use crate::{
 
 use super::watch::{WatchEvent, WatchEventKind, WatchList, WatchService};
 
+#[cfg(test)]
+mod test_flags {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static FORCE_INITIAL_EVENTS: AtomicBool = AtomicBool::new(false);
+
+    pub struct InitialEventsGuard;
+
+    impl InitialEventsGuard {
+        pub fn new() -> Self {
+            FORCE_INITIAL_EVENTS.store(true, Ordering::SeqCst);
+            Self
+        }
+    }
+
+    impl Drop for InitialEventsGuard {
+        fn drop(&mut self) {
+            FORCE_INITIAL_EVENTS.store(false, Ordering::SeqCst);
+        }
+    }
+
+    pub fn force_initial_events() -> InitialEventsGuard {
+        InitialEventsGuard::new()
+    }
+
+    pub fn take_initial_events() -> bool {
+        FORCE_INITIAL_EVENTS.swap(false, Ordering::SeqCst)
+    }
+}
+
 pub struct DaemonHandles {
     watch: Option<WatchService>,
     shutdown: Arc<AtomicBool>,
@@ -71,15 +101,28 @@ pub fn start_with_transport(
     let pipeline_logger = logger.clone();
     let watch_pipeline = pipeline.clone();
     let watch_logger = logger.clone();
-    let watch = WatchService::spawn(&layout, move |event| {
-        let pipeline_for_event = watch_pipeline.clone();
-        handle_watch_event(
+    let handler = move |event| {
+        handle_watch_pipeline_event(
+            watch_pipeline.clone(),
             event,
-            move || pipeline_for_event.dispatch_pending().map(|_| ()),
             &pipeline_logger,
             &watch_logger,
         );
-    })?;
+    };
+    #[cfg(test)]
+    if test_flags::take_initial_events() {
+        handler(WatchEvent {
+            list: WatchList::Outbox,
+            path: layout.outbox(),
+            kind: WatchEventKind::Created,
+        });
+        handler(WatchEvent {
+            list: WatchList::Outbox,
+            path: layout.outbox(),
+            kind: WatchEventKind::Error("forced initial error".into()),
+        });
+    }
+    let watch = WatchService::spawn(&layout, handler)?;
 
     let retention_shutdown = shutdown.clone();
     let retention_logger = logger.clone();
@@ -124,6 +167,20 @@ pub fn start_with_transport(
     })
 }
 
+fn handle_watch_pipeline_event(
+    pipeline: Arc<OutboxPipeline>,
+    event: WatchEvent,
+    pipeline_logger: &Logger,
+    watch_logger: &Logger,
+) {
+    handle_watch_event(
+        event,
+        move || pipeline.dispatch_pending().map(|_| ()),
+        pipeline_logger,
+        watch_logger,
+    );
+}
+
 fn handle_watch_event<F>(
     event: WatchEvent,
     dispatch: F,
@@ -132,23 +189,24 @@ fn handle_watch_event<F>(
 ) where
     F: FnOnce() -> Result<()>,
 {
-    let kind = event.kind.clone();
-    match (event.list, kind) {
-        (WatchList::Outbox, WatchEventKind::Created)
-        | (WatchList::Outbox, WatchEventKind::Modified) => {
-            if let Err(err) = dispatch() {
-                let _ = pipeline_logger.log(
-                    LogLevel::Minimal,
-                    "daemon.outbox.error",
-                    Some(&err.to_string()),
-                );
-            }
+    if event.list == WatchList::Outbox {
+        if let WatchEventKind::Created | WatchEventKind::Modified = &event.kind
+            && let Err(err) = dispatch()
+        {
+            let _ = pipeline_logger.log(
+                LogLevel::Minimal,
+                "daemon.outbox.error",
+                Some(&err.to_string()),
+            );
         }
-        (WatchList::Quarantine, WatchEventKind::Created) => {
+        if let WatchEventKind::Error(ref msg) = event.kind {
+            let _ = watch_logger.log(LogLevel::Minimal, "daemon.watch.error", Some(msg));
+        }
+    } else if event.list == WatchList::Quarantine {
+        if matches!(&event.kind, WatchEventKind::Created) {
             let detail = format!("path={}", event.path.display());
             let _ = watch_logger.log(LogLevel::Minimal, "daemon.quarantine", Some(&detail));
-        }
-        (WatchList::Quarantine, WatchEventKind::Modified) => {
+        } else if matches!(&event.kind, WatchEventKind::Modified) {
             let detail = format!("path={}", event.path.display());
             let _ = watch_logger.log(
                 LogLevel::VerboseSanitized,
@@ -156,11 +214,9 @@ fn handle_watch_event<F>(
                 Some(&detail),
             );
         }
-        (WatchList::Quarantine, WatchEventKind::Error(msg))
-        | (WatchList::Outbox, WatchEventKind::Error(msg)) => {
-            let _ = watch_logger.log(LogLevel::Minimal, "daemon.watch.error", Some(&msg));
+        if let WatchEventKind::Error(ref msg) = event.kind {
+            let _ = watch_logger.log(LogLevel::Minimal, "daemon.watch.error", Some(msg));
         }
-        _ => {}
     }
 }
 
@@ -185,7 +241,9 @@ mod tests {
             ..EnvConfig::default()
         };
         let logger = Logger::new(layout.root(), LogLevel::Off).unwrap();
-        let transport: Arc<dyn MailTransport> = Arc::new(SucceedingTransport);
+        let transport: Arc<dyn MailTransport> = Arc::new(CountingTransport {
+            deliveries: Arc::new(AtomicUsize::new(0)),
+        });
         let pipeline = Arc::new(OutboxPipeline::with_transport(
             layout.clone(),
             env.clone(),
@@ -247,6 +305,28 @@ mod tests {
             entries
                 .iter()
                 .any(|entry| entry.message == "daemon.outbox.start_error")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn start_forced_initial_events_invoke_handler() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let env = EnvConfig::default();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+
+        let _guard = super::test_flags::force_initial_events();
+        let handles = start(layout.clone(), env, logger.clone()).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        handles.stop();
+
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.message == "daemon.watch.error")
         );
     }
 
@@ -361,10 +441,14 @@ mod tests {
         );
     }
 
-    struct SucceedingTransport;
+    #[derive(Clone)]
+    struct CountingTransport {
+        deliveries: Arc<AtomicUsize>,
+    }
 
-    impl MailTransport for SucceedingTransport {
+    impl MailTransport for CountingTransport {
         fn send(&self, _message: &[u8], _sidecar: &MessageSidecar) -> Result<()> {
+            self.deliveries.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
     }
@@ -394,6 +478,48 @@ mod tests {
     }
 
     #[test]
+    fn handle_watch_pipeline_event_dispatches_pending_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let env = EnvConfig::default();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+
+        let deliveries = Arc::new(AtomicUsize::new(0));
+        let transport: Arc<dyn MailTransport> = Arc::new(CountingTransport {
+            deliveries: Arc::clone(&deliveries),
+        });
+        let pipeline = Arc::new(OutboxPipeline::with_transport(
+            layout.clone(),
+            env.clone(),
+            logger.clone(),
+            transport,
+        ));
+
+        let draft_id = crate::util::ulid::generate();
+        let draft_path = layout.drafts().join(format!("{draft_id}.md"));
+        std::fs::write(
+            &draft_path,
+            "---\nsubject: Dispatch\nfrom: Owl <owl@example.org>\nto:\n  - Bob <bob@example.org>\n---\nBody\n",
+        )
+        .unwrap();
+        pipeline.queue_draft(&draft_path).unwrap();
+
+        handle_watch_pipeline_event(
+            Arc::clone(&pipeline),
+            WatchEvent {
+                list: WatchList::Outbox,
+                path: layout.outbox().join(outbox_message_filename(&draft_id)),
+                kind: WatchEventKind::Created,
+            },
+            &logger,
+            &logger,
+        );
+
+        assert_eq!(deliveries.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn handle_watch_event_dispatch_error_is_logged() {
         let dir = tempfile::tempdir().unwrap();
         let layout = MailLayout::new(dir.path());
@@ -414,6 +540,36 @@ mod tests {
             entries
                 .iter()
                 .any(|entry| entry.message == "daemon.outbox.error")
+        );
+    }
+
+    #[test]
+    fn handle_watch_event_outbox_error_is_logged() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+        let dispatch_calls = Arc::new(AtomicUsize::new(0));
+        let dispatch_counter = dispatch_calls.clone();
+        handle_watch_event(
+            WatchEvent {
+                list: WatchList::Outbox,
+                path: layout.outbox(),
+                kind: WatchEventKind::Error("forced error".into()),
+            },
+            move || {
+                dispatch_counter.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+            &logger,
+            &logger,
+        );
+        assert_eq!(dispatch_calls.load(Ordering::SeqCst), 0);
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.message == "daemon.watch.error")
         );
     }
 
