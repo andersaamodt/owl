@@ -26,9 +26,15 @@ struct DaemonCli {
     once: bool,
 }
 
+#[cfg(not(test))]
 fn main() -> Result<()> {
     let cli = DaemonCli::parse();
     execute(&cli)
+}
+
+#[cfg(test)]
+fn main() -> Result<()> {
+    Ok(())
 }
 
 fn execute(cli: &DaemonCli) -> Result<()> {
@@ -178,6 +184,11 @@ mod tests {
     fn mail_root_uses_parent_directory() {
         let root = mail_root(Path::new("/srv/mail/.env"));
         assert_eq!(root, PathBuf::from("/srv/mail"));
+    }
+
+    #[test]
+    fn stub_main_is_callable() {
+        super::main().unwrap();
     }
 
     #[test]
