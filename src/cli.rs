@@ -113,6 +113,7 @@ pub fn run(cli: OwlCli, env: EnvConfig) -> Result<String> {
     let root = mail_root(&env_path);
     let log_level = env.logging.parse::<LogLevel>().unwrap_or(LogLevel::Minimal);
     let logger = Logger::new(root.clone(), log_level)?;
+    let effective_log_level = logger.level();
     match cli.command.unwrap_or(Commands::Triage {
         address: None,
         list: None,
@@ -135,7 +136,7 @@ pub fn run(cli: OwlCli, env: EnvConfig) -> Result<String> {
             path,
         } => export_sender(&env_path, &env, &list, &address, &path),
         Commands::Import { source } => import_archive(&env_path, &source),
-        Commands::Logs { action } => logs(&root, log_level, action, cli.json),
+        Commands::Logs { action } => logs(&root, effective_log_level, action, cli.json),
     }
 }
 
@@ -355,13 +356,7 @@ fn triage(
     };
 
     for list_name in &lists {
-        let base_dir = match list_name.as_str() {
-            "accepted" => layout.accepted(),
-            "spam" => layout.spam(),
-            "banned" => layout.banned(),
-            "quarantine" => layout.quarantine(),
-            other => bail!("unsupported list for triage: {other}"),
-        };
+        let base_dir = layout.root().join(list_name);
         let mut senders = Vec::new();
         if let Some(filter) = &filter_address {
             senders.push(filter.clone());
@@ -414,10 +409,6 @@ fn triage(
 
     if json {
         return Ok(serde_json::to_string(&entries)?);
-    }
-
-    if entries.is_empty() {
-        return Ok("no messages matched".into());
     }
 
     let mut grouped: HashMap<&str, Vec<&TriageEntry>> = HashMap::new();
@@ -625,7 +616,8 @@ fn send_draft(env_path: &Path, env: &EnvConfig, logger: &Logger, draft: &str) ->
     let pipeline = OutboxPipeline::new(layout.clone(), env.clone(), logger.clone());
     let draft_path = resolve_draft_path(&layout, draft)?;
     if !draft_path.exists() {
-        bail!("draft {} not found", draft_path.display());
+        let err = anyhow!("draft {} not found", draft_path.display());
+        return Err(err);
     }
     let message_path = pipeline.queue_draft(&draft_path)?;
     if draft_path.starts_with(layout.drafts()) {
@@ -902,7 +894,7 @@ fn first_mailbox(addrs: &[MailAddr]) -> Option<String> {
     None
 }
 
-fn resolve_env_path(raw: &str) -> Result<PathBuf> {
+pub fn resolve_env_path(raw: &str) -> Result<PathBuf> {
     resolve_env_path_with_home(raw, home_dir)
 }
 
@@ -1061,23 +1053,60 @@ mod tests {
     }
 
     #[test]
+    fn triage_formats_entries_without_extras() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let env = EnvConfig::default();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let sender_dir = layout.quarantine().join("dave@example.org");
+        fs::create_dir_all(&sender_dir).unwrap();
+        let subject = "Reminder";
+        let ulid = "01ARZ3NDEKTSV4RRFFQ69G5FD1";
+        let sidecar = MessageSidecar::new(
+            ulid,
+            crate::model::filename::message_filename(subject, ulid),
+            "quarantine",
+            "strict",
+            crate::model::filename::html_filename(subject, ulid),
+            "beadfeed",
+            crate::model::message::HeadersCache::new("Dave", subject),
+        );
+        let sidecar_path = sender_dir.join(crate::model::filename::sidecar_filename(subject, ulid));
+        write_atomic(
+            &sidecar_path,
+            serde_yaml::to_string(&sidecar).unwrap().as_bytes(),
+        )
+        .unwrap();
+
+        let output = triage(&env_path, &env, None, None, false).unwrap();
+        assert!(output.contains("dave@example.org"));
+        assert!(output.contains("Reminder"));
+        assert!(
+            !output.contains("["),
+            "extras should be empty when no metadata is present"
+        );
+    }
+
+    #[test]
+    fn triage_reports_empty_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let env = EnvConfig::default();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+
+        let output = triage(&env_path, &env, None, Some("spam".into()), false).unwrap();
+        assert_eq!(output, "spam:\n  (no messages)");
+    }
+
+    #[test]
     fn triage_unknown_list_errors() {
         let dir = tempfile::tempdir().unwrap();
         let env_path = dir.path().join(".env");
         let env = EnvConfig::default();
         let err = triage(&env_path, &env, None, Some("mystery".into()), false).unwrap_err();
         assert!(err.to_string().contains("unknown list"));
-    }
-
-    #[test]
-    fn triage_reports_empty_lists() {
-        let dir = tempfile::tempdir().unwrap();
-        let env_path = dir.path().join(".env");
-        let env = EnvConfig::default();
-        let layout = MailLayout::new(dir.path());
-        layout.ensure().unwrap();
-        let output = triage(&env_path, &env, None, Some("spam".into()), false).unwrap();
-        assert_eq!(output, "no messages matched");
     }
 
     #[test]
@@ -1204,6 +1233,26 @@ mod tests {
             json: false,
         };
         let err = run(cli, env).unwrap_err();
+        assert!(err.to_string().contains("draft"));
+    }
+
+    #[test]
+    fn send_draft_missing_file_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        fs::write(&env_path, EnvConfig::default().to_env_string()).unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+        let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
+
+        let missing = layout.root().join("missing.md");
+        let err = send_draft(
+            &env_path,
+            &EnvConfig::default(),
+            &logger,
+            missing.to_str().unwrap(),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("draft"));
     }
 
@@ -1386,6 +1435,27 @@ mod tests {
     }
 
     #[test]
+    fn logs_command_reports_disabled_when_logger_downgraded() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("mail");
+        fs::create_dir_all(&root).unwrap();
+        let env_path = root.join(".env");
+        fs::write(&env_path, EnvConfig::default().to_env_string()).unwrap();
+        fs::write(root.join("logs"), b"stub").unwrap();
+
+        let cli = OwlCli {
+            env: env_path.to_string_lossy().into(),
+            command: Some(Commands::Logs {
+                action: LogAction::Show,
+            }),
+            json: false,
+        };
+
+        let output = run(cli, EnvConfig::default()).unwrap();
+        assert_eq!(output, "logging disabled");
+    }
+
+    #[test]
     #[serial]
     fn import_maildir_consumes_messages() {
         with_fake_render_env(|| {
@@ -1473,6 +1543,29 @@ mod tests {
             import_archive(&env_path, &maildir).unwrap();
 
             let layout = MailLayout::new(&root);
+            let fallback_dir = layout.quarantine().join("unknown@import.invalid");
+            assert!(fallback_dir.exists());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn deliver_imported_message_uses_fallback_when_group_empty() {
+        with_fake_render_env(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("mail");
+            fs::create_dir_all(&root).unwrap();
+            let env_path = root.join(".env");
+            fs::write(&env_path, EnvConfig::default().to_env_string()).unwrap();
+
+            let layout = MailLayout::new(&root);
+            layout.ensure().unwrap();
+            let env = EnvConfig::default();
+            let (pipeline, rules) = inbound_context(&layout, &env).unwrap();
+
+            let body = b"From: Friends:;\r\nSubject: Hello\r\n\r\nBody\r\n";
+            deliver_imported_message(&pipeline, &rules, &env, body).unwrap();
+
             let fallback_dir = layout.quarantine().join("unknown@import.invalid");
             assert!(fallback_dir.exists());
         });
@@ -1596,7 +1689,7 @@ mod tests {
             addr: "lead@example.org".into(),
         });
         assert_eq!(
-            first_mailbox(&[group.clone()]),
+            first_mailbox(std::slice::from_ref(&group)),
             Some("helper@example.org".into())
         );
         assert_eq!(first_mailbox(&[single]), Some("lead@example.org".into()));
@@ -1626,18 +1719,31 @@ mod tests {
         unsafe {
             std::env::set_var("PATH", &new_path);
         }
+        let sanitizer = dir.path().join("sanitize-html");
+        let original_sanitizer = std::env::var_os("SANITIZE_HTML_COMMAND");
+        unsafe {
+            std::env::set_var("SANITIZE_HTML_COMMAND", &sanitizer);
+        }
         struct PathGuard {
-            original: Option<std::ffi::OsString>,
+            original_path: Option<std::ffi::OsString>,
+            original_sanitizer: Option<std::ffi::OsString>,
         }
         impl Drop for PathGuard {
             fn drop(&mut self) {
-                match self.original.take() {
+                match self.original_path.take() {
                     Some(path) => unsafe { std::env::set_var("PATH", path) },
                     None => unsafe { std::env::remove_var("PATH") },
                 }
+                match self.original_sanitizer.take() {
+                    Some(cmd) => unsafe { std::env::set_var("SANITIZE_HTML_COMMAND", cmd) },
+                    None => unsafe { std::env::remove_var("SANITIZE_HTML_COMMAND") },
+                }
             }
         }
-        let _guard = PathGuard { original };
+        let _guard = PathGuard {
+            original_path: original,
+            original_sanitizer,
+        };
         f()
     }
 
@@ -1891,7 +1997,7 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(output, "no messages matched");
+        assert_eq!(output, "quarantine:\n  (no messages)");
         // ensure we touched the expected sender path even though it does not exist
         assert!(!layout.quarantine().join(&canonical).exists());
     }
@@ -1924,7 +2030,7 @@ mod tests {
             json: false,
         };
         let output = run(cli, EnvConfig::default()).unwrap();
-        assert_eq!(output, "no messages matched");
+        assert_eq!(output, "quarantine:\n  (no messages)");
     }
 
     #[test]
@@ -1971,6 +2077,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn restart_reports_success_for_requested_service() {
         let dir = tempfile::tempdir().unwrap();
         let exec = dir.path().join("systemctl");
