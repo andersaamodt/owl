@@ -64,7 +64,7 @@ mod tests {
         let script = write_script(
             &dir,
             "custom-sanitize",
-            "#!/bin/sh\nsed 's/<script/[blocked]/g'\n",
+            "#!/bin/sh\ncat >/dev/null\nprintf '[blocked]'\n",
         );
         let html = "<div><script>alert(1)</script></div>";
         let sanitized = sanitize_html_with(&script, &[], html).unwrap();
