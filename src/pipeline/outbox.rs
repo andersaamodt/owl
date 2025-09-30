@@ -870,11 +870,13 @@ mod tests {
 
     #[test]
     fn smtp_relay_honours_starttls_and_credentials() {
-        let mut env = EnvConfig::default();
-        env.smtp_starttls = true;
-        env.smtp_host = Some("smtp.example.org".into());
-        env.smtp_username = Some("user".into());
-        env.smtp_password = Some("pass".into());
+        let env = EnvConfig {
+            smtp_starttls: true,
+            smtp_host: Some("smtp.example.org".into()),
+            smtp_username: Some("user".into()),
+            smtp_password: Some("pass".into()),
+            ..EnvConfig::default()
+        };
         let relay = SmtpRelay::from_env(&env);
         // Ensure the builder path executes without panic.
         let _ = format!("{:?}", relay.inner);
@@ -882,9 +884,11 @@ mod tests {
 
     #[test]
     fn smtp_relay_without_starttls_uses_dangerous_builder() {
-        let mut env = EnvConfig::default();
-        env.smtp_starttls = false;
-        env.smtp_host = Some("smtp.example.org".into());
+        let env = EnvConfig {
+            smtp_starttls: false,
+            smtp_host: Some("smtp.example.org".into()),
+            ..EnvConfig::default()
+        };
         let relay = SmtpRelay::from_env(&env);
         let _ = format!("{:?}", relay.inner);
     }
@@ -967,8 +971,7 @@ mod tests {
         let err = build_envelope(&sidecar).expect_err("expected invalid from");
         assert!(format!("{err}").contains("invalid from address"));
 
-        let mut headers = headers;
-        headers.from = "Alice <alice@example.org>".into();
+        let mut headers = HeadersCache::new("Alice <alice@example.org>", "Hello");
         headers.to = vec!["not-an-email".into()];
         sidecar.headers_cache = headers.clone();
         let err = build_envelope(&sidecar).expect_err("expected invalid recipient");
