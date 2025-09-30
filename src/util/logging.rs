@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{self, Write},
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -64,18 +64,31 @@ impl Logger {
     pub fn new(root: impl Into<PathBuf>, level: LogLevel) -> Result<Self> {
         let root = root.into();
         let logs_dir = root.join("logs");
+        let mut effective_level = level;
         if level != LogLevel::Off {
-            fs::create_dir_all(&logs_dir)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let perms = fs::Permissions::from_mode(0o700);
-                fs::set_permissions(&logs_dir, perms)?;
+            match fs::create_dir_all(&logs_dir) {
+                Ok(()) => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let perms = fs::Permissions::from_mode(0o700);
+                        fs::set_permissions(&logs_dir, perms)?;
+                    }
+                }
+                Err(err) => match err.kind() {
+                    io::ErrorKind::PermissionDenied
+                    | io::ErrorKind::NotFound
+                    | io::ErrorKind::AlreadyExists
+                    | io::ErrorKind::NotADirectory => {
+                        effective_level = LogLevel::Off;
+                    }
+                    _ => return Err(err.into()),
+                },
             }
         }
         Ok(Self {
             inner: Arc::new(LoggerInner {
-                level,
+                level: effective_level,
                 path: logs_dir.join("owl.log"),
                 file: Mutex::new(None),
             }),
@@ -203,6 +216,16 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
+    fn downgrades_to_off_when_logs_path_blocked() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("logs"), b"stub").unwrap();
+
+        let logger = Logger::new(root, LogLevel::Minimal).unwrap();
+        assert_eq!(logger.level(), LogLevel::Off);
+    }
+
+    #[test]
     fn parse_levels() {
         assert_eq!(LogLevel::from_str("off").unwrap(), LogLevel::Off);
         assert_eq!(
@@ -279,11 +302,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let logger = Logger::new(dir.path(), LogLevel::Minimal).unwrap();
         let logs_dir = dir.path().join("logs");
-        let dir_mode = fs::metadata(&logs_dir)
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
+        let dir_mode = fs::metadata(&logs_dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(dir_mode, 0o700);
 
         logger
