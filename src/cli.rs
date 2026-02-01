@@ -1596,7 +1596,7 @@ mod tests {
             addr: "lead@example.org".into(),
         });
         assert_eq!(
-            first_mailbox(&[group.clone()]),
+            first_mailbox(std::slice::from_ref(&group)),
             Some("helper@example.org".into())
         );
         assert_eq!(first_mailbox(&[single]), Some("lead@example.org".into()));
