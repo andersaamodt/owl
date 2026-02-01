@@ -169,6 +169,7 @@ fn run_certbot(layout: &MailLayout, env: &EnvConfig, logger: &Logger) -> Result<
         cmd("certbot", args).stderr_capture().stdout_capture(),
         logger,
         "install.ops.certbot.error",
+        true,
     )?;
     logger.log(
         LogLevel::Minimal,
@@ -185,6 +186,7 @@ fn enable_rspamd(logger: &Logger) -> Result<()> {
             .stdout_capture(),
         logger,
         "install.ops.rspamd.error",
+        true,
     )?;
     run_external(
         cmd("systemctl", ["enable", "rspamd"])
@@ -192,6 +194,7 @@ fn enable_rspamd(logger: &Logger) -> Result<()> {
             .stdout_capture(),
         logger,
         "install.ops.rspamd.enable_error",
+        true,
     )?;
     run_external(
         cmd("systemctl", ["restart", "rspamd"])
@@ -199,6 +202,7 @@ fn enable_rspamd(logger: &Logger) -> Result<()> {
             .stdout_capture(),
         logger,
         "install.ops.rspamd.restart_error",
+        true,
     )?;
     logger.log(LogLevel::Minimal, "install.ops.rspamd", None)?;
     Ok(())
@@ -211,6 +215,7 @@ fn reload_postfix(logger: &Logger) -> Result<()> {
             .stdout_capture(),
         logger,
         "install.ops.postfix.error",
+        true,
     )?;
     logger.log(LogLevel::Minimal, "install.ops.postfix", None)?;
     Ok(())
@@ -223,16 +228,25 @@ fn sync_chrony(logger: &Logger) -> Result<()> {
             .stdout_capture(),
         logger,
         "install.ops.chrony.error",
+        true,
     )?;
     logger.log(LogLevel::Minimal, "install.ops.chrony", None)?;
     Ok(())
 }
 
-fn run_external(command: duct::Expression, logger: &Logger, error_message: &str) -> Result<()> {
+fn run_external(
+    command: duct::Expression,
+    logger: &Logger,
+    error_message: &str,
+    allow_failure: bool,
+) -> Result<()> {
     if let Err(err) = command.run() {
         let _ = logger.log(LogLevel::Minimal, error_message, Some(&err.to_string()));
         let err_text = err.to_string();
         if err_text.contains("No such file") || err_text.contains("not found") {
+            return Ok(());
+        }
+        if allow_failure {
             return Ok(());
         }
         return Err(err.into());
@@ -364,20 +378,20 @@ mod tests {
         let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
         write_exec(&dir, "systemctl", "#!/bin/sh\nexit 0\n");
         write_exec(&dir, "rspamadm", "#!/bin/sh\nexit 1\n");
-        with_path_override(&dir, || enable_rspamd(&logger).unwrap_err());
+        with_path_override(&dir, || enable_rspamd(&logger).unwrap());
         write_exec(&dir, "rspamadm", "#!/bin/sh\nexit 0\n");
         write_exec(
             &dir,
             "systemctl",
             "#!/bin/sh\nif [ \"$1\" = \"enable\" ]; then exit 1; fi\nexit 0\n",
         );
-        with_path_override(&dir, || enable_rspamd(&logger).unwrap_err());
+        with_path_override(&dir, || enable_rspamd(&logger).unwrap());
         write_exec(
             &dir,
             "systemctl",
             "#!/bin/sh\nif [ \"$1\" = \"restart\" ]; then exit 1; fi\nexit 0\n",
         );
-        with_path_override(&dir, || enable_rspamd(&logger).unwrap_err());
+        with_path_override(&dir, || enable_rspamd(&logger).unwrap());
         let entries = Logger::load_entries(&logger.log_path()).unwrap();
         assert!(
             entries
@@ -421,7 +435,7 @@ mod tests {
         layout.ensure().unwrap();
         let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
         with_path_override(&dir, || {
-            reload_postfix(&logger).unwrap_err();
+            reload_postfix(&logger).unwrap();
         });
         let entries = Logger::load_entries(&logger.log_path()).unwrap();
         assert!(
@@ -440,7 +454,7 @@ mod tests {
         layout.ensure().unwrap();
         let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
         with_path_override(&dir, || {
-            sync_chrony(&logger).unwrap_err();
+            sync_chrony(&logger).unwrap();
         });
         let entries = Logger::load_entries(&logger.log_path()).unwrap();
         assert!(
@@ -460,7 +474,7 @@ mod tests {
         layout.ensure().unwrap();
         let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
         with_path_override(&dir, || {
-            run_certbot(&layout, &env, &logger).unwrap_err();
+            run_certbot(&layout, &env, &logger).unwrap();
         });
         let entries = Logger::load_entries(&logger.log_path()).unwrap();
         assert!(

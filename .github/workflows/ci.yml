@@ -37,7 +37,7 @@ jobs:
       - name: Coverage 100%
         run: |
           mkdir -p coverage
-          cargo tarpaulin --out Xml --output-dir coverage --fail-under 100
+          cargo tarpaulin --engine llvm --out Xml --output-dir coverage --fail-under 100
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-report

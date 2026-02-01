@@ -17,6 +17,7 @@ jobs:
   linux:
     name: Build Linux targets
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -43,6 +44,7 @@ jobs:
   macos:
     name: Build macOS targets
     runs-on: ${{ matrix.os }}
+    if: ${{ github.event_name != 'pull_request' }}
     strategy:
       fail-fast: false
       matrix:

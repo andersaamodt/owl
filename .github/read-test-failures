@@ -5,11 +5,22 @@
 # workflow with extracted test failures. This allows AI agents to see test failures
 # immediately without any files being committed to the repo.
 #
-# Usage: ./read-test-failures [pr-number|--previous]
+# Usage: ./read-test-failures [--repo owner/name] [pr-number|--previous]
 # If pr-number is omitted, tries to detect from current branch.
 # Use --previous to fetch errors from the previous PR (current PR - 1).
 
 set -eu
+
+# Check for --repo flag
+repo_slug="${REPO_SLUG:-${GITHUB_REPOSITORY:-}}"
+if [ "${1:-}" = "--repo" ]; then
+  if [ -z "${2:-}" ]; then
+    echo "Error: --repo requires an argument in the form owner/name"
+    exit 1
+  fi
+  repo_slug="$2"
+  shift 2
+fi
 
 # Check for --previous flag
 get_previous=0
@@ -20,7 +31,7 @@ fi
 
 # Try to get PR number from argument or detect it
 pr_number="${1:-}"
-repo_slug="owl-mail/owl"
+repo_slug="${repo_slug:-owl-mail/owl}"
 
 origin_url=$(git config --get remote.origin.url 2>/dev/null || echo "")
 if [ -n "$origin_url" ]; then
@@ -54,14 +65,15 @@ fi
 if [ -z "$pr_number" ]; then
   echo "Error: Could not determine PR number"
   echo ""
-  echo "Usage: ./read-test-failures [--previous] [pr-number]"
+  echo "Usage: ./read-test-failures [--repo owner/name] [--previous] [pr-number]"
   echo ""
   echo "Options:"
+  echo "  --repo          GitHub repo slug (owner/name). Defaults to \$GITHUB_REPOSITORY or \$REPO_SLUG"
   echo "  --previous, -p  Fetch errors from the previous PR (current PR - 1)"
   echo ""
   echo "Please provide the PR number as an argument or use --previous."
-  echo "Example: ./read-test-failures 123"
-  echo "Example: ./read-test-failures --previous"
+  echo "Example: ./read-test-failures --repo owl-mail/owl 123"
+  echo "Example: REPO_SLUG=owl-mail/owl ./read-test-failures --previous"
   exit 1
 fi
 
