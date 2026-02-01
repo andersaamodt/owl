@@ -20,6 +20,19 @@ fi
 
 # Try to get PR number from argument or detect it
 pr_number="${1:-}"
+repo_slug="owl-mail/owl"
+
+origin_url=$(git config --get remote.origin.url 2>/dev/null || echo "")
+if [ -n "$origin_url" ]; then
+  case "$origin_url" in
+    git@github.com:*)
+      repo_slug=$(printf '%s' "$origin_url" | sed -n 's#git@github.com:\(.*\)\.git#\1#p')
+      ;;
+    https://github.com/*)
+      repo_slug=$(printf '%s' "$origin_url" | sed -n 's#https://github.com/\(.*\)\.git#\1#p')
+      ;;
+  esac
+fi
 
 if [ -z "$pr_number" ]; then
   # Try to detect PR number from current branch
@@ -30,7 +43,8 @@ if [ -z "$pr_number" ]; then
     echo "Searching for PR..."
 
     # Search for open PRs with this head branch
-    pr_data=$(curl -s "https://api.github.com/repos/owl-mail/owl/pulls?state=all&per_page=50&head=owl-mail:$branch" 2>&1)
+    owner=$(printf '%s' "$repo_slug" | cut -d'/' -f1)
+    pr_data=$(curl -s "https://api.github.com/repos/$repo_slug/pulls?state=all&per_page=50&head=${owner}:$branch" 2>&1)
 
     # Extract PR number from first match (allowing for spaces in JSON)
     pr_number=$(echo "$pr_data" | grep -o '"number":[[:space:]]*[0-9]*' | head -1 | grep -o '[0-9]*$')
@@ -64,7 +78,7 @@ echo ""
 
 # Fetch the PR description using GitHub API
 # Use python to properly parse JSON and extract body
-pr_body=$(curl -s "https://api.github.com/repos/owl-mail/owl/pulls/$pr_number" | \
+pr_body=$(curl -s "https://api.github.com/repos/$repo_slug/pulls/$pr_number" | \
   python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('body', '') if data.get('body') else '')" 2>/dev/null)
 
 # Check if we got a body
@@ -87,7 +101,7 @@ if echo "$pr_body" | grep -q "🔍 Latest Test Failures"; then
   echo ""
   echo "========================================"
   echo ""
-  echo "Full PR: https://github.com/owl-mail/owl/pull/$pr_number"
+  echo "Full PR: https://github.com/$repo_slug/pull/$pr_number"
 else
   echo "No test failures section found in PR description."
   echo ""
@@ -96,6 +110,6 @@ else
   echo "- The workflow is still running"
   echo "- All tests are passing"
   echo ""
-  echo "Check the PR manually: https://github.com/owl-mail/owl/pull/$pr_number"
+  echo "Check the PR manually: https://github.com/$repo_slug/pull/$pr_number"
   exit 1
 fi
