@@ -1,0 +1,120 @@
+name: Build release artifacts
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  linux:
+    name: Build Linux targets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+      - name: Build Linux targets
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown-linux-gnueabihf; do
+            cross build --release --target "$target" --bins
+            for bin in owl owl-daemon; do
+              src="target/$target/release/$bin"
+              out="dist/${bin}-${target}"
+              cp "$src" "$out"
+              sha256sum "$out" > "${out}.sha256"
+            done
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owl-binaries-linux
+          path: dist/
+
+  macos:
+    name: Build macOS targets
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install system dependencies
+        run: |
+          brew update
+          brew install pkg-config openssl@3
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> "$GITHUB_ENV"
+      - name: Build macOS artifacts
+        run: |
+          set -euo pipefail
+          target=$(rustc -vV | awk '/^host:/ {print $2}')
+          mkdir -p dist
+          cargo build --release --locked --bins
+          for bin in owl owl-daemon; do
+            src="target/release/$bin"
+            out="dist/${bin}-${target}"
+            cp "$src" "$out"
+            shasum -a 256 "$out" > "${out}.sha256"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owl-binaries-macos-${{ matrix.os }}
+          path: dist/
+
+  cleanup:
+    name: Cleanup old build artifacts
+    if: success() && github.event_name == 'push'
+    needs: [linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove old artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const keepCount = 3;
+            const response = await github.rest.actions.listArtifactsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100
+            });
+            const prefix = 'owl-binaries-';
+            const artifacts = response.data.artifacts
+              .filter(artifact => artifact.name.startsWith(prefix))
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            const toDelete = artifacts.slice(keepCount);
+            for (const artifact of toDelete) {
+              await github.rest.actions.deleteArtifact({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                artifact_id: artifact.id
+              });
+            }
+
+  release:
+    name: Publish release artifacts
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: owl-binaries-*
+          merge-multiple: true
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

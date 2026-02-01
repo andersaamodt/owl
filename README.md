@@ -23,6 +23,22 @@ cargo build
 cargo test
 ```
 
+## Install via curl
+
+Use the installer for a curl-based setup (downloads release binaries or falls back to a source build):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/owl-mail/owl/main/scripts/install.sh | sh
+```
+
+Set `OWL_REPO` if you are using a fork:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/install.sh | OWL_REPO=<owner>/<repo> sh
+```
+
+After install, the script can launch the interactive configuration wizard found at `scripts/configure.sh`.
+
 Run the background workers with the companion daemon binary:
 
 ```bash
@@ -32,6 +48,12 @@ cargo run --bin owl-daemon
 Pass `--once` to perform a single reconciliation cycle, which is helpful for smoke-testing service installs.
 
 `EnvConfig` supports loading from a `.env` file and falls back to sane defaults that match the starter configuration in [`env.sample`](env.sample).
+
+## Documentation
+
+- [`docs/overview.md`](docs/overview.md): architecture, storage layout, pipelines, and operational notes.
+- [`docs/cli.md`](docs/cli.md): CLI reference for `owl` and `owl-daemon` (POSIX-shell friendly).
+- [`SPEC.md`](SPEC.md): authoritative implementation requirements and schema definitions.
 
 ## Coverage
 
