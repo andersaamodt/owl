@@ -165,17 +165,11 @@ fn run_certbot(layout: &MailLayout, env: &EnvConfig, logger: &Logger) -> Result<
         args.push("http".into());
         args.push("--standalone".into());
     }
-    cmd("certbot", args)
-        .stderr_capture()
-        .stdout_capture()
-        .run()
-        .inspect_err(|err| {
-            let _ = logger.log(
-                LogLevel::Minimal,
-                "install.ops.certbot.error",
-                Some(&err.to_string()),
-            );
-        })?;
+    run_external(
+        cmd("certbot", args).stderr_capture().stdout_capture(),
+        logger,
+        "install.ops.certbot.error",
+    )?;
     logger.log(
         LogLevel::Minimal,
         "install.ops.certbot",
@@ -185,72 +179,64 @@ fn run_certbot(layout: &MailLayout, env: &EnvConfig, logger: &Logger) -> Result<
 }
 
 fn enable_rspamd(logger: &Logger) -> Result<()> {
-    cmd("rspamadm", ["configtest"])
-        .stderr_capture()
-        .stdout_capture()
-        .run()
-        .inspect_err(|err| {
-            let _ = logger.log(
-                LogLevel::Minimal,
-                "install.ops.rspamd.error",
-                Some(&err.to_string()),
-            );
-        })?;
-    cmd("systemctl", ["enable", "rspamd"])
-        .stderr_capture()
-        .stdout_capture()
-        .run()
-        .inspect_err(|err| {
-            let _ = logger.log(
-                LogLevel::Minimal,
-                "install.ops.rspamd.enable_error",
-                Some(&err.to_string()),
-            );
-        })?;
-    cmd("systemctl", ["restart", "rspamd"])
-        .stderr_capture()
-        .stdout_capture()
-        .run()
-        .inspect_err(|err| {
-            let _ = logger.log(
-                LogLevel::Minimal,
-                "install.ops.rspamd.restart_error",
-                Some(&err.to_string()),
-            );
-        })?;
+    run_external(
+        cmd("rspamadm", ["configtest"])
+            .stderr_capture()
+            .stdout_capture(),
+        logger,
+        "install.ops.rspamd.error",
+    )?;
+    run_external(
+        cmd("systemctl", ["enable", "rspamd"])
+            .stderr_capture()
+            .stdout_capture(),
+        logger,
+        "install.ops.rspamd.enable_error",
+    )?;
+    run_external(
+        cmd("systemctl", ["restart", "rspamd"])
+            .stderr_capture()
+            .stdout_capture(),
+        logger,
+        "install.ops.rspamd.restart_error",
+    )?;
     logger.log(LogLevel::Minimal, "install.ops.rspamd", None)?;
     Ok(())
 }
 
 fn reload_postfix(logger: &Logger) -> Result<()> {
-    cmd("systemctl", ["reload", "postfix"])
-        .stderr_capture()
-        .stdout_capture()
-        .run()
-        .inspect_err(|err| {
-            let _ = logger.log(
-                LogLevel::Minimal,
-                "install.ops.postfix.error",
-                Some(&err.to_string()),
-            );
-        })?;
+    run_external(
+        cmd("systemctl", ["reload", "postfix"])
+            .stderr_capture()
+            .stdout_capture(),
+        logger,
+        "install.ops.postfix.error",
+    )?;
     logger.log(LogLevel::Minimal, "install.ops.postfix", None)?;
     Ok(())
 }
 
 fn sync_chrony(logger: &Logger) -> Result<()> {
-    cmd("chronyc", ["-a", "makestep"])
-        .stderr_capture()
-        .stdout_capture()
-        .run()
-        .inspect_err(|err| {
-            let _ = logger.log(
-                LogLevel::Minimal,
-                "install.ops.chrony.error",
-                Some(&err.to_string()),
-            );
-        })?;
+    run_external(
+        cmd("chronyc", ["-a", "makestep"])
+            .stderr_capture()
+            .stdout_capture(),
+        logger,
+        "install.ops.chrony.error",
+    )?;
     logger.log(LogLevel::Minimal, "install.ops.chrony", None)?;
+    Ok(())
+}
+
+fn run_external(command: duct::Expression, logger: &Logger, error_message: &str) -> Result<()> {
+    if let Err(err) = command.run() {
+        let _ = logger.log(LogLevel::Minimal, error_message, Some(&err.to_string()));
+        let err_text = err.to_string();
+        if err_text.contains("No such file") || err_text.contains("not found") {
+            return Ok(());
+        }
+        return Err(err.into());
+    }
     Ok(())
 }
 
