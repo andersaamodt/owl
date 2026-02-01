@@ -22,7 +22,7 @@ on:
 
 # Cancel previous runs when a new commit is pushed
 concurrency:
-  group: collect-failures-${{ github.event.pull_request.number }}-${{ github.event_name }}
+  group: collect-failures-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref_name }}-${{ github.sha }}
   cancel-in-progress: true
 
 permissions:
