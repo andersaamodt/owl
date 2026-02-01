@@ -78,12 +78,18 @@ echo ""
 
 # Fetch the PR description using GitHub API
 # Use python to properly parse JSON and extract body
-pr_body=$(curl -s "https://api.github.com/repos/$repo_slug/pulls/$pr_number" | \
+api_body=$(curl -s "https://api.github.com/repos/$repo_slug/pulls/$pr_number")
+pr_body=$(printf '%s' "$api_body" | \
   python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('body', '') if data.get('body') else '')" 2>/dev/null)
 
 # Check if we got a body
 if [ -z "$pr_body" ]; then
-  echo "Error: Could not fetch PR #$pr_number or it has no description"
+  message=$(printf '%s' "$api_body" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('message', ''))" 2>/dev/null || true)
+  if [ -n "$message" ]; then
+    echo "Error: Could not fetch PR #$pr_number ($message)"
+  else
+    echo "Error: Could not fetch PR #$pr_number or it has no description"
+  fi
   exit 1
 fi
 

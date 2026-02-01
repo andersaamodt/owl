@@ -69,6 +69,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Nix
         uses: cachix/install-nix-action@v27
+      - name: Configure nixpkgs channel
+        run: |
+          nix-channel --add https://nixos.org/channels/nixos-unstable nixpkgs
+          nix-channel --update
+          echo "NIX_PATH=nixpkgs=$HOME/.nix-defexpr/channels/nixpkgs" >> "$GITHUB_ENV"
       - name: Run unit tests in nix shell
         env:
           CARGO_TERM_COLOR: always

@@ -8,7 +8,7 @@ use owl::{
 };
 use std::path::Path;
 
-fn execute(cli: OwlCli) -> anyhow::Result<()> {
+fn execute(mut cli: OwlCli) -> anyhow::Result<()> {
     let env = if cli.env.is_empty() {
         EnvConfig::default()
     } else {
@@ -19,6 +19,9 @@ fn execute(cli: OwlCli) -> anyhow::Result<()> {
             EnvConfig::default()
         }
     };
+    if cli.env.is_empty() {
+        cli.env = ".env".to_string();
+    }
     let output = run(cli.clone(), env)?;
     println!("{output}");
     Ok(())
