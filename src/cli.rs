@@ -32,63 +32,87 @@ use anyhow::{Context, Result, anyhow, bail};
 #[derive(Parser, Debug, Clone)]
 #[command(name = "owl", version, about = "File-first mail system")]
 pub struct OwlCli {
-    #[arg(long, default_value = "/home/pi/mail/.env")]
+    #[arg(long, default_value = "/home/pi/mail/.env", help = "Path to the .env file")]
     pub env: String,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
 
-    #[arg(long)]
+    #[arg(long, help = "Enable JSON output for supported commands")]
     pub json: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
+    #[command(about = "Bootstrap mail storage, DKIM keys, and system hooks")]
     Install,
+    #[command(about = "Re-apply provisioning hooks and ensure layout exists")]
     Update,
+    #[command(about = "Restart Owl services via systemctl")]
     Restart {
-        #[arg(value_enum, default_value_t = RestartTarget::All)]
+        #[arg(value_enum, default_value_t = RestartTarget::All, help = "Service to restart")]
         target: RestartTarget,
     },
+    #[command(about = "Reload routing rules without restarting the daemon")]
     Reload,
+    #[command(about = "List messages in quarantine or a specific list")]
     Triage {
-        #[arg(long)]
+        #[arg(long, help = "Filter by sender address")]
         address: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = "List to triage (quarantine, accepted, spam, banned)")]
         list: Option<String>,
     },
+    #[command(about = "Show sender directories for one list or all lists")]
     ListSenders {
-        #[arg(long)]
+        #[arg(long, help = "List to show senders from (quarantine, accepted, spam, banned)")]
         list: Option<String>,
     },
+    #[command(about = "Move all mail for a sender between lists")]
     MoveSender {
+        #[arg(help = "Source list")]
         from: String,
+        #[arg(help = "Destination list")]
         to: String,
+        #[arg(help = "Sender address to move")]
         address: String,
     },
+    #[command(about = "Toggle the pinned flag for all messages from a sender")]
     Pin {
+        #[arg(help = "Sender address to pin/unpin")]
         address: String,
-        #[arg(long)]
+        #[arg(long, help = "Remove the pinned flag instead of setting it")]
         unset: bool,
     },
+    #[command(about = "Queue a draft for delivery")]
     Send {
+        #[arg(help = "Draft file path or ULID")]
         draft: String,
     },
+    #[command(about = "Create a tarball of the mail root")]
     Backup {
+        #[arg(help = "Output path for the backup tarball")]
         path: PathBuf,
     },
+    #[command(about = "Export a single sender to a tarball")]
     ExportSender {
+        #[arg(help = "List to export from")]
         list: String,
+        #[arg(help = "Sender address to export")]
         address: String,
+        #[arg(help = "Output path for the tarball")]
         path: PathBuf,
     },
+    #[command(about = "Import legacy archives into quarantine")]
     Import {
+        #[arg(help = "Path to maildir, mbox, or tar.gz archive")]
         source: PathBuf,
     },
+    #[command(about = "Render structured logs")]
     Logs {
-        #[arg(value_enum, default_value_t = LogAction::Show)]
+        #[arg(value_enum, default_value_t = LogAction::Show, help = "Action to perform on logs")]
         action: LogAction,
     },
+    #[command(about = "Run the interactive configuration wizard")]
     Configure,
 }
 
