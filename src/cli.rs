@@ -2438,6 +2438,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn restart_reports_success_for_requested_service() {
         let dir = tempfile::tempdir().unwrap();
         let exec = dir.path().join("systemctl");
