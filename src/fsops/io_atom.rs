@@ -2,14 +2,26 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tempfile::NamedTempFile;
 
 pub fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut tmp = NamedTempFile::new_in(path.parent().unwrap_or_else(|| Path::new(".")))?;
+
+    let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
+
+    // Try to create temp file - this can fail with EOPNOTSUPP on some macOS filesystems
+    let mut tmp = match NamedTempFile::new_in(parent_dir) {
+        Ok(t) => t,
+        Err(e) if e.raw_os_error() == Some(45) => {
+            // EOPNOTSUPP on macOS - fallback to using tempdir in /tmp
+            NamedTempFile::new().with_context(|| "creating temp file (fallback)")?
+        }
+        Err(e) => return Err(e.into()),
+    };
+
     tmp.write_all(contents)?;
     tmp.flush()?;
     tmp.as_file().sync_all()?;
