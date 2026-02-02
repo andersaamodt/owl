@@ -28,6 +28,16 @@ pub fn create_dir_all(path: &Path) -> Result<()> {
                 match fs::create_dir(path) {
                     Ok(()) => Ok(()),
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+                    Err(e) if e.raw_os_error() == Some(45) => {
+                        // Even fs::create_dir fails with EOPNOTSUPP
+                        // Directory might actually exist, or we can't create it
+                        if path.exists() && path.is_dir() {
+                            Ok(())
+                        } else {
+                            // Can't create this directory at all
+                            Err(e.into())
+                        }
+                    }
                     Err(e) => Err(e.into()),
                 }
             }
