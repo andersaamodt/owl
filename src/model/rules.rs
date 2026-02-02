@@ -194,4 +194,143 @@ mod tests {
         let non_match = Address::parse("help@example.org", false).unwrap();
         assert!(!rule.matches(&non_match));
     }
+
+    #[test]
+    fn parse_comment_line_errors() {
+        let err = Rule::parse("# This is a comment").expect_err("expected error");
+        assert!(err.to_string().contains("empty rule"));
+    }
+
+    #[test]
+    fn ruleset_parse_with_blank_lines() {
+        let data = "@example.org\n\n@another.org\n\n";
+        let set: RuleSet = data.parse().unwrap();
+        assert_eq!(set.rules().len(), 2);
+    }
+
+    #[test]
+    fn ruleset_parse_with_comments() {
+        let data = "# Comment line\n@example.org\n# Another comment\nuser@test.org";
+        let set: RuleSet = data.parse().unwrap();
+        assert_eq!(set.rules().len(), 2);
+    }
+
+    #[test]
+    fn ruleset_evaluate_returns_none_for_no_match() {
+        let data = "@example.org";
+        let set: RuleSet = data.parse().unwrap();
+        let addr = Address::parse("user@other.org", false).unwrap();
+        assert!(set.evaluate(&addr).is_none());
+    }
+
+    #[test]
+    fn ruleset_empty() {
+        let set = RuleSet::default();
+        assert!(set.rules().is_empty());
+
+        let addr = Address::parse("any@example.org", false).unwrap();
+        assert!(set.evaluate(&addr).is_none());
+    }
+
+    #[test]
+    fn exact_address_case_insensitive() {
+        let rule = Rule::parse("Alice@Example.Org").unwrap();
+        let addr = Address::parse("alice@example.org", false).unwrap();
+        assert!(rule.matches(&addr));
+    }
+
+    #[test]
+    fn domain_suffix_case_insensitive() {
+        let rule = Rule::parse("@Example.Org").unwrap();
+        let addr = Address::parse("user@EXAMPLE.ORG", false).unwrap();
+        assert!(rule.matches(&addr));
+    }
+
+    #[test]
+    fn domain_exact_case_insensitive() {
+        let rule = Rule::parse("@=Example.Org").unwrap();
+        let addr = Address::parse("user@example.org", false).unwrap();
+        assert!(rule.matches(&addr));
+    }
+
+    #[test]
+    fn regex_rule_with_anchors() {
+        let rule = Rule::parse(r"/^admin@/").unwrap();
+        let match_addr = Address::parse("admin@example.org", false).unwrap();
+        assert!(rule.matches(&match_addr));
+
+        let no_match = Address::parse("user@admin.org", false).unwrap();
+        assert!(!rule.matches(&no_match));
+    }
+
+    #[test]
+    fn regex_rule_case_sensitive() {
+        // Regex is case-sensitive unless specified otherwise
+        let rule = Rule::parse(r"/ADMIN/").unwrap();
+        let lowercase = Address::parse("admin@example.org", false).unwrap();
+        // Address is canonicalized to lowercase, so this won't match
+        assert!(!rule.matches(&lowercase));
+    }
+
+    #[test]
+    fn regex_rule_with_alternation() {
+        let rule = Rule::parse(r"/^(admin|support)@example\.org$/").unwrap();
+        let admin = Address::parse("admin@example.org", false).unwrap();
+        let support = Address::parse("support@example.org", false).unwrap();
+        let other = Address::parse("user@example.org", false).unwrap();
+
+        assert!(rule.matches(&admin));
+        assert!(rule.matches(&support));
+        assert!(!rule.matches(&other));
+    }
+
+    #[test]
+    fn domain_suffix_with_leading_dot() {
+        let rule = Rule::parse("@.example.org").unwrap();
+        let subdomain = Address::parse("user@mail.example.org", false).unwrap();
+        let exact = Address::parse("user@example.org", false).unwrap();
+
+        // Leading dot is trimmed, so it matches both
+        assert!(rule.matches(&subdomain));
+        assert!(rule.matches(&exact));
+    }
+
+    #[test]
+    fn multiple_level_subdomain() {
+        let rule = Rule::parse("@example.org").unwrap();
+        let deep = Address::parse("user@a.b.c.example.org", false).unwrap();
+        assert!(rule.matches(&deep));
+    }
+
+    #[test]
+    fn exact_address_with_plus_tag() {
+        // Plus tags are stripped during canonicalization by default
+        let rule = Rule::parse("alice@example.org").unwrap();
+        let with_tag = Address::parse("alice+tag@example.org", false).unwrap();
+        assert!(rule.matches(&with_tag));
+    }
+
+    #[test]
+    fn ruleset_first_match_wins() {
+        let data = "@example.org\nalice@example.org\n/.*@example.org/";
+        let set: RuleSet = data.parse().unwrap();
+        let addr = Address::parse("alice@example.org", false).unwrap();
+
+        let matched = set.evaluate(&addr).unwrap();
+        // First rule (@example.org) should match
+        assert!(matches!(matched, Rule::DomainSuffix(_)));
+    }
+
+    #[test]
+    fn rule_parse_with_whitespace() {
+        let rule = Rule::parse("  @example.org  ").unwrap();
+        assert!(matches!(rule, Rule::DomainSuffix(_)));
+    }
+
+    #[test]
+    fn invalid_rule_format() {
+        assert!(Rule::parse("not-an-email-or-pattern").is_err());
+        assert!(Rule::parse("").is_err());
+        assert!(Rule::parse("   ").is_err()); // whitespace only
+    }
 }
