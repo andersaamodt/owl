@@ -1,5 +1,5 @@
 use owl::{
-    cli::{run, Commands, OwlCli},
+    cli::{Commands, OwlCli, run},
     envcfg::EnvConfig,
     fsops::layout::MailLayout,
     model::address::Address,
@@ -45,7 +45,8 @@ fn delivers_to_quarantine() {
         let layout = MailLayout::new(dir.path());
         let pipeline = InboundPipeline::new(layout, EnvConfig::default()).unwrap();
         let sender = Address::parse("alice@example.org", false).unwrap();
-        let message = b"Subject: Integration\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nbody";
+        let message =
+            b"Subject: Integration\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nbody";
         let path = pipeline
             .deliver_quarantine(&sender, "Integration", message)
             .unwrap();
@@ -61,7 +62,8 @@ fn delivers_to_accepted_route() {
         let layout = MailLayout::new(dir.path());
         let pipeline = InboundPipeline::new(layout, EnvConfig::default()).unwrap();
         let sender = Address::parse("bob@example.org", false).unwrap();
-        let message = b"Subject: Integration\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nbody";
+        let message =
+            b"Subject: Integration\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nbody";
         let path = pipeline
             .deliver_to_route(Route::Accepted, &sender, "Integration", message)
             .unwrap();
@@ -71,8 +73,11 @@ fn delivers_to_accepted_route() {
 
 #[test]
 fn cli_runs_triage_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join(".env");
+    std::fs::write(&env_path, "logging=off\n").unwrap();
     let cli = OwlCli {
-        env: "".into(),
+        env: env_path.to_string_lossy().into(),
         command: Some(Commands::Reload),
         json: false,
     };

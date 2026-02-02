@@ -279,11 +279,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let logger = Logger::new(dir.path(), LogLevel::Minimal).unwrap();
         let logs_dir = dir.path().join("logs");
-        let dir_mode = fs::metadata(&logs_dir)
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
+        let dir_mode = fs::metadata(&logs_dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(dir_mode, 0o700);
 
         logger

@@ -1,8 +1,8 @@
 use owl::{
     envcfg::EnvConfig,
     model::{address::Address, rules::RuleSet},
-    ruleset::{eval::Route, loader::LoadedRules},
     pipeline::inbound::determine_route,
+    ruleset::{eval::Route, loader::LoadedRules},
 };
 
 #[test]

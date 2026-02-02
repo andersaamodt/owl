@@ -16,9 +16,7 @@ fn queue_draft_writes_sidecar_and_eml() {
     let pipeline = OutboxPipeline::new(layout.clone(), env, logger);
 
     let draft_ulid = owl::util::ulid::generate();
-    let draft_path = layout
-        .drafts()
-        .join(format!("{draft_ulid}.md"));
+    let draft_path = layout.drafts().join(format!("{draft_ulid}.md"));
     std::fs::write(
         &draft_path,
         "---\nsubject: Agenda\nfrom: Owl <owl@example.org>\nto:\n  - Carol <carol@example.org>\n---\nBody\n",
@@ -28,9 +26,7 @@ fn queue_draft_writes_sidecar_and_eml() {
     let message_path = pipeline.queue_draft(&draft_path).unwrap();
     assert!(message_path.exists());
 
-    let sidecar_path = layout
-        .outbox()
-        .join(outbox_sidecar_filename(&draft_ulid));
+    let sidecar_path = layout.outbox().join(outbox_sidecar_filename(&draft_ulid));
     let yaml = std::fs::read_to_string(&sidecar_path).unwrap();
     let sidecar: MessageSidecar = serde_yaml::from_str(&yaml).unwrap();
     assert_eq!(sidecar.schema, 1);

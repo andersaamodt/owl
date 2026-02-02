@@ -1,4 +1,4 @@
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use owl::{
     envcfg::EnvConfig,
     fsops::layout::MailLayout,
@@ -46,10 +46,7 @@ fn queued_message_has_valid_dkim_signature() {
     let message = String::from_utf8(message_bytes.clone()).unwrap();
     let (headers_section, body_section) = message.split_once("\r\n\r\n").unwrap();
     let dkim_header = dkim::extract_header(headers_section, "dkim-signature").unwrap();
-    let value = dkim_header
-        .strip_prefix("DKIM-Signature:")
-        .unwrap()
-        .trim();
+    let value = dkim_header.strip_prefix("DKIM-Signature:").unwrap().trim();
     let signature_b64 = parse_tag(value, "b").unwrap();
     let body_hash_b64 = parse_tag(value, "bh").unwrap();
     let header_list = parse_tag(value, "h").unwrap();
