@@ -93,4 +93,69 @@ mod tests {
             prop_assert_eq!(slug.trim(), slug.as_str());
         }
     }
+
+    #[test]
+    fn slug_removes_windows_forbidden_chars() {
+        // Per spec: Windows-safe filenames filter /, \, :, *, ?, ", <, >, |
+        let slug = subject_to_slug("Test/File\\Name:With*Forbidden?Chars\"<>|");
+        assert!(!slug.contains('/'));
+        assert!(!slug.contains('\\'));
+        assert!(!slug.contains(':'));
+        assert!(!slug.contains('*'));
+        assert!(!slug.contains('?'));
+        assert!(!slug.contains('"'));
+        assert!(!slug.contains('<'));
+        assert!(!slug.contains('>'));
+        assert!(!slug.contains('|'));
+    }
+
+    #[test]
+    fn slug_removes_control_characters() {
+        // Per spec: Control characters filtered
+        let slug = subject_to_slug("Test\x00\x01\x02\tTab\nNewline\rReturn");
+        assert!(!slug.chars().any(|c| c.is_control()));
+    }
+
+    #[test]
+    fn slug_truncates_to_80_chars() {
+        // Per spec: ≤80 chars
+        let long_subject = "a".repeat(200);
+        let slug = subject_to_slug(&long_subject);
+        assert!(slug.len() <= 80);
+        assert_eq!(slug.chars().count(), 80);
+    }
+
+    #[test]
+    fn slug_preserves_unicode() {
+        // Per spec: Unicode preserved
+        let slug = subject_to_slug("Hello 世界 Привет مرحبا");
+        assert!(slug.contains('世'));
+        assert!(slug.contains('界'));
+        assert!(slug.contains("Привет"));
+        assert!(slug.contains("مرحبا"));
+    }
+
+    #[test]
+    fn message_filename_format() {
+        // Per spec: <subject slug> (<ULID>).eml
+        let fname = message_filename("Test Subject", "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        assert_eq!(fname, "Test Subject (01ARZ3NDEKTSV4RRFFQ69G5FAV).eml");
+    }
+
+    #[test]
+    fn sidecar_filename_hidden() {
+        // Per spec: sidecar is hidden (starts with .)
+        let fname = sidecar_filename("Test", "01ABC");
+        assert!(fname.starts_with('.'));
+        assert!(fname.contains("01ABC"));
+        assert!(fname.ends_with(".yml"));
+    }
+
+    #[test]
+    fn html_filename_hidden() {
+        // Per spec: sanitized HTML is hidden (starts with .)
+        let fname = html_filename("Test", "01ABC");
+        assert!(fname.starts_with('.'));
+        assert!(fname.ends_with(".html"));
+    }
 }

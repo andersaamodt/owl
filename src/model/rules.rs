@@ -157,4 +157,35 @@ mod tests {
     fn unsupported_rule_fails() {
         assert!(Rule::parse("invalid").is_err());
     }
+
+    #[test]
+    fn domain_suffix_matches_subdomains() {
+        // Per spec: @example.org matches subdomains
+        let rule = Rule::parse("@example.org").unwrap();
+        let addr = Address::parse("user@mail.example.org", false).unwrap();
+        assert!(rule.matches(&addr), "Domain suffix should match subdomains");
+    }
+
+    #[test]
+    fn domain_exact_does_not_match_subdomains() {
+        // Per spec: @=example.org matches exact domain only
+        let rule = Rule::parse("@=example.org").unwrap();
+        let addr = Address::parse("user@mail.example.org", false).unwrap();
+        assert!(!rule.matches(&addr), "Domain exact should not match subdomains");
+        
+        let exact_addr = Address::parse("user@example.org", false).unwrap();
+        assert!(rule.matches(&exact_addr), "Domain exact should match exact domain");
+    }
+
+    #[test]
+    fn regex_rule_with_special_chars() {
+        // Test POSIX ERE regex with common patterns
+        // Note: addresses are canonicalized (+ stripped by default)
+        let rule = Rule::parse(r"/^support.*@example\.org$/").unwrap();
+        let addr = Address::parse("support-tickets@example.org", false).unwrap();
+        assert!(rule.matches(&addr));
+        
+        let non_match = Address::parse("help@example.org", false).unwrap();
+        assert!(!rule.matches(&non_match));
+    }
 }
