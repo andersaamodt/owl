@@ -16,9 +16,23 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::flag;
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "owl-daemon", about = "Owl background worker", version)]
+#[command(
+    name = "owl-daemon",
+    about = "Owl background daemon - monitors quarantine/outbox and processes messages automatically",
+    long_about = "The Owl daemon (owld) provides background services:\n\
+                  - Watches quarantine directory for incoming messages\n\
+                  - Watches outbox directory for outgoing messages\n\
+                  - Automatically processes and routes mail\n\
+                  - Enforces retention policies\n\n\
+                  Run without arguments to use default configuration at ~/mail/.env",
+    version
+)]
 struct DaemonCli {
-    #[arg(long, default_value = "~/mail/.env")]
+    #[arg(
+        long,
+        default_value = "~/mail/.env",
+        help = "Path to .env file (~ expands to home)"
+    )]
     env: String,
 
     /// Run a single setup cycle and exit (used for tests)

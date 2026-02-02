@@ -37,8 +37,8 @@ use anyhow::{Context, Result, anyhow, bail};
 pub struct OwlCli {
     #[arg(
         long,
-        default_value = "/home/pi/mail/.env",
-        help = "Path to the .env file"
+        default_value = "~/mail/.env",
+        help = "Path to the .env file (~ expands to home directory)"
     )]
     pub env: String,
 
