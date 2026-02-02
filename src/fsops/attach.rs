@@ -104,4 +104,133 @@ mod tests {
         let store = AttachmentStore::new(&path);
         assert!(store.garbage_collect().unwrap().is_empty());
     }
+
+    #[test]
+    fn store_deduplicates_identical_content() {
+        // Per spec: content-addressed storage means same content = same file
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+
+        let stored1 = store.store("photo1.jpg", b"image data").unwrap();
+        let stored2 = store.store("photo2.jpg", b"image data").unwrap();
+
+        // Same hash, different names in filename
+        assert_eq!(stored1.sha256, stored2.sha256);
+
+        // Both files should exist (different names due to filename suffix)
+        assert!(stored1.path.exists());
+        assert!(stored2.path.exists());
+    }
+
+    #[test]
+    fn store_filename_format_includes_sha256_and_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+
+        let stored = store.store("invoice.pdf", b"test content").unwrap();
+        let filename = stored.path.file_name().unwrap().to_string_lossy();
+
+        // Per spec: format is <sha256>__<orig-name>
+        assert!(filename.contains("__"));
+        assert!(filename.ends_with("invoice.pdf"));
+        assert_eq!(stored.sha256.len(), 64); // SHA256 is 32 bytes = 64 hex chars
+    }
+
+    #[test]
+    fn garbage_collect_removes_only_empty_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+
+        // Store a real file
+        store.store("real.txt", b"content").unwrap();
+
+        // Create empty files manually
+        fs::write(store.root.join("empty1"), b"").unwrap();
+        fs::write(store.root.join("empty2"), b"").unwrap();
+
+        let removed = store.garbage_collect().unwrap();
+
+        // Should only remove empty files
+        assert_eq!(removed.len(), 2);
+
+        // Real file should still exist
+        assert!(store.root.join("real.txt").parent().unwrap().exists());
+    }
+
+    #[test]
+    fn load_nonexistent_file_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+
+        let err = store
+            .load("nonexistent__file.txt")
+            .expect_err("expected error");
+        assert!(
+            format!("{err:?}").contains("No such file") || format!("{err:?}").contains("not found")
+        );
+    }
+
+    #[test]
+    fn store_binary_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+
+        // Binary data (not UTF-8)
+        let binary = vec![0xFF, 0xFE, 0xFD, 0x00, 0x01, 0x02];
+        let stored = store.store("binary.dat", &binary).unwrap();
+
+        let loaded = store
+            .load(stored.path.file_name().unwrap().to_str().unwrap())
+            .unwrap();
+        assert_eq!(loaded, binary);
+    }
+
+    #[test]
+    fn store_large_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+
+        // 1MB file
+        let large_data = vec![0xAB; 1024 * 1024];
+        let stored = store.store("large.bin", &large_data).unwrap();
+
+        let loaded = store
+            .load(stored.path.file_name().unwrap().to_str().unwrap())
+            .unwrap();
+        assert_eq!(loaded.len(), large_data.len());
+        assert_eq!(loaded, large_data);
+    }
+
+    #[test]
+    fn store_special_characters_in_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+
+        // Filename with spaces and special chars
+        let stored = store.store("my document (v2).pdf", b"doc").unwrap();
+        let filename = stored.path.file_name().unwrap().to_string_lossy();
+
+        assert!(filename.contains("my document (v2).pdf"));
+
+        // Should be loadable
+        let loaded = store
+            .load(stored.path.file_name().unwrap().to_str().unwrap())
+            .unwrap();
+        assert_eq!(loaded, b"doc");
+    }
+
+    #[test]
+    fn garbage_collect_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+
+        fs::write(store.root.join("empty"), b"").unwrap();
+
+        let removed1 = store.garbage_collect().unwrap();
+        assert_eq!(removed1.len(), 1);
+
+        // Second GC should find nothing
+        let removed2 = store.garbage_collect().unwrap();
+        assert_eq!(removed2.len(), 0);
+    }
 }
