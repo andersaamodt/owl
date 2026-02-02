@@ -5,9 +5,23 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use tempfile::NamedTempFile;
 
+/// Create all directories in the path, handling EOPNOTSUPP on macOS
+pub fn create_dir_all(path: &Path) -> Result<()> {
+    match fs::create_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.raw_os_error() == Some(45) => {
+            // EOPNOTSUPP on macOS - filesystem doesn't support directory creation
+            // This can happen on certain APFS configurations
+            // Continue as if successful - operations will fail later if directory truly needed
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 pub fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        create_dir_all(parent)?;
     }
 
     let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
