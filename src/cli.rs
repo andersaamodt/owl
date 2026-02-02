@@ -1335,7 +1335,7 @@ mod tests {
     use clap::Parser;
     use flate2::read::GzDecoder;
     use serial_test::serial;
-    use std::{fs, path::Path};
+    use std::{fs, io::Cursor, path::Path};
     use tar::Archive;
 
     #[test]
@@ -2310,6 +2310,88 @@ mod tests {
         };
         let output = run(cli, EnvConfig::default()).unwrap();
         assert_eq!(output, "no messages matched");
+    }
+
+    #[test]
+    fn prompt_uses_default_when_empty() {
+        let input_data = b"\n";
+        let mut input = Cursor::new(input_data.as_slice());
+        let mut output = Vec::new();
+        let value = prompt(&mut input, &mut output, "Label", Some("default")).unwrap();
+        assert_eq!(value, "default");
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("Label [default]:")
+        );
+    }
+
+    #[test]
+    fn prompt_yes_no_accepts_defaults_and_inputs() {
+        let mut input = Cursor::new(b"\n");
+        let mut output = Vec::new();
+        let value = prompt_yes_no(&mut input, &mut output, "Confirm?", true).unwrap();
+        assert!(value);
+
+        let mut input = Cursor::new(b"n\n");
+        let mut output = Vec::new();
+        let value = prompt_yes_no(&mut input, &mut output, "Confirm?", true).unwrap();
+        assert!(!value);
+    }
+
+    #[test]
+    fn upsert_env_setting_updates_existing_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        fs::write(&env_path, "logging=minimal\n").unwrap();
+        upsert_env_setting(&env_path, "logging", "verbose_full").unwrap();
+        let contents = fs::read_to_string(&env_path).unwrap();
+        assert!(contents.contains("logging=verbose_full"));
+    }
+
+    #[test]
+    fn set_rules_entry_appends_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let rules_path = dir.path().join("accepted/.rules");
+        set_rules_entry(&rules_path, "alice@example.org").unwrap();
+        set_rules_entry(&rules_path, "alice@example.org").unwrap();
+        let contents = fs::read_to_string(&rules_path).unwrap();
+        let count = contents
+            .lines()
+            .filter(|line| *line == "alice@example.org")
+            .count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn set_settings_file_renders_expected_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join("accepted/.settings");
+        set_settings_file(
+            &settings_path,
+            "Owl <owl@example.org>",
+            "reply@example.org",
+            "/tmp/signature.txt",
+            "both",
+            "never",
+            "accepted",
+        )
+        .unwrap();
+        let contents = fs::read_to_string(&settings_path).unwrap();
+        assert!(contents.contains("list_status=accepted"));
+        assert!(contents.contains("body_format=both"));
+        assert!(contents.contains("signature=/tmp/signature.txt"));
+    }
+
+    #[test]
+    fn show_summary_handles_missing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let mut output = Vec::new();
+        show_summary(&mut output, &env_path, dir.path()).unwrap();
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(rendered.contains("(missing)"));
+        assert!(rendered.contains("Rules for accepted"));
     }
 
     #[test]
