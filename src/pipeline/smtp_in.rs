@@ -334,9 +334,10 @@ mod tests {
         }
         unsafe { std::env::set_var("PATH", &new_path) };
         let result = panic::catch_unwind(panic::AssertUnwindSafe(f));
-        match original {
-            Some(orig) => unsafe { std::env::set_var("PATH", orig) },
-            None => unsafe { std::env::remove_var("PATH") },
+        if let Some(orig) = original {
+            unsafe { std::env::set_var("PATH", orig) };
+        } else {
+            unsafe { std::env::remove_var("PATH") };
         }
         match result {
             Ok(value) => value,
@@ -537,9 +538,8 @@ mod tests {
             assert!(std::env::var_os("PATH").is_some());
         });
         assert!(std::env::var_os("PATH").is_none());
-        match original {
-            Some(path) => unsafe { std::env::set_var("PATH", path) },
-            None => {}
+        if let Some(path) = original {
+            unsafe { std::env::set_var("PATH", path) };
         }
     }
 

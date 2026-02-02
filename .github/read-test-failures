@@ -1,0 +1,133 @@
+#!/bin/sh
+# read-test-failures - Fetch and display latest test failures from PR description
+#
+# This script fetches the PR description which is updated by the collect-failures
+# workflow with extracted test failures. This allows AI agents to see test failures
+# immediately without any files being committed to the repo.
+#
+# Usage: ./read-test-failures [--repo owner/name] [pr-number|--previous]
+# If pr-number is omitted, tries to detect from current branch.
+# Use --previous to fetch errors from the previous PR (current PR - 1).
+
+set -eu
+
+# Check for --repo flag
+repo_slug="${REPO_SLUG:-${GITHUB_REPOSITORY:-}}"
+if [ "${1:-}" = "--repo" ]; then
+  if [ -z "${2:-}" ]; then
+    echo "Error: --repo requires an argument in the form owner/name"
+    exit 1
+  fi
+  repo_slug="$2"
+  shift 2
+fi
+
+# Check for --previous flag
+get_previous=0
+if [ "${1:-}" = "--previous" ] || [ "${1:-}" = "-p" ]; then
+  get_previous=1
+  shift || true
+fi
+
+# Try to get PR number from argument or detect it
+pr_number="${1:-}"
+repo_slug="${repo_slug:-owl-mail/owl}"
+
+origin_url=$(git config --get remote.origin.url 2>/dev/null || echo "")
+if [ -n "$origin_url" ]; then
+  case "$origin_url" in
+    git@github.com:*)
+      repo_slug=$(printf '%s' "$origin_url" | sed -n 's#git@github.com:\(.*\)\.git#\1#p')
+      ;;
+    https://github.com/*)
+      repo_slug=$(printf '%s' "$origin_url" | sed -n 's#https://github.com/\(.*\)\.git#\1#p')
+      ;;
+  esac
+fi
+
+if [ -z "$pr_number" ]; then
+  # Try to detect PR number from current branch
+  branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+
+  if [ -n "$branch" ] && [ "$branch" != "HEAD" ]; then
+    echo "Current branch: $branch"
+    echo "Searching for PR..."
+
+    # Search for open PRs with this head branch
+    owner=$(printf '%s' "$repo_slug" | cut -d'/' -f1)
+    pr_data=$(curl -s "https://api.github.com/repos/$repo_slug/pulls?state=all&per_page=50&head=${owner}:$branch" 2>&1)
+
+    # Extract PR number from first match (allowing for spaces in JSON)
+    pr_number=$(echo "$pr_data" | grep -o '"number":[[:space:]]*[0-9]*' | head -1 | grep -o '[0-9]*$')
+  fi
+fi
+
+if [ -z "$pr_number" ]; then
+  echo "Error: Could not determine PR number"
+  echo ""
+  echo "Usage: ./read-test-failures [--repo owner/name] [--previous] [pr-number]"
+  echo ""
+  echo "Options:"
+  echo "  --repo          GitHub repo slug (owner/name). Defaults to \$GITHUB_REPOSITORY or \$REPO_SLUG"
+  echo "  --previous, -p  Fetch errors from the previous PR (current PR - 1)"
+  echo ""
+  echo "Please provide the PR number as an argument or use --previous."
+  echo "Example: ./read-test-failures --repo owl-mail/owl 123"
+  echo "Example: REPO_SLUG=owl-mail/owl ./read-test-failures --previous"
+  exit 1
+fi
+
+# If --previous flag was used, get the previous PR number
+if [ "$get_previous" = "1" ]; then
+  echo "Fetching previous PR (PR #$pr_number - 1)..."
+  pr_number=$((pr_number - 1))
+  echo "Using PR #$pr_number"
+  echo ""
+fi
+
+echo "Fetching test failures for PR #$pr_number..."
+echo ""
+
+# Fetch the PR description using GitHub API
+# Use python to properly parse JSON and extract body
+api_body=$(curl -s "https://api.github.com/repos/$repo_slug/pulls/$pr_number")
+pr_body=$(printf '%s' "$api_body" | \
+  python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('body', '') if data.get('body') else '')" 2>/dev/null)
+
+# Check if we got a body
+if [ -z "$pr_body" ]; then
+  message=$(printf '%s' "$api_body" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('message', ''))" 2>/dev/null || true)
+  if [ -n "$message" ]; then
+    echo "Error: Could not fetch PR #$pr_number ($message)"
+  else
+    echo "Error: Could not fetch PR #$pr_number or it has no description"
+  fi
+  exit 1
+fi
+
+# Look for the test failures section
+if echo "$pr_body" | grep -q "🔍 Latest Test Failures"; then
+  echo "========================================"
+  echo " Latest Test Failures (from PR description)"
+  echo "========================================"
+  echo ""
+
+  # Extract the failures section (from marker to end marker)
+  echo "$pr_body" | sed -n '/## 🔍 Latest Test Failures/,/<!-- test-failures-end -->/p' | \
+    sed '$ d'  # Remove the end marker line
+
+  echo ""
+  echo "========================================"
+  echo ""
+  echo "Full PR: https://github.com/$repo_slug/pull/$pr_number"
+else
+  echo "No test failures section found in PR description."
+  echo ""
+  echo "This may mean:"
+  echo "- The collect-failures workflow hasn't run yet"
+  echo "- The workflow is still running"
+  echo "- All tests are passing"
+  echo ""
+  echo "Check the PR manually: https://github.com/$repo_slug/pull/$pr_number"
+  exit 1
+fi

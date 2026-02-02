@@ -1,0 +1,100 @@
+name: Cross-platform unit tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref_name }}-${{ github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu:
+    name: Ubuntu unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - name: Run unit tests
+        env:
+          CARGO_TERM_COLOR: always
+          RUST_BACKTRACE: 1
+        run: cargo test --all --all-features --locked
+
+  debian:
+    name: Debian unit tests
+    runs-on: ubuntu-latest
+    container: debian:stable-slim
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y git curl ca-certificates build-essential pkg-config libssl-dev
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run unit tests
+        env:
+          CARGO_TERM_COLOR: always
+          RUST_BACKTRACE: 1
+        run: cargo test --all --all-features --locked
+
+  arch:
+    name: Arch unit tests
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install system dependencies
+        run: |
+          pacman -Sy --noconfirm git base-devel openssl pkgconf curl ca-certificates
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run unit tests
+        env:
+          CARGO_TERM_COLOR: always
+          RUST_BACKTRACE: 1
+        run: cargo test --all --all-features --locked
+
+  nixos:
+    name: NixOS unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+      - name: Configure nixpkgs channel
+        run: |
+          nix-channel --add https://nixos.org/channels/nixos-unstable nixpkgs
+          nix-channel --update
+          echo "NIX_PATH=nixpkgs=$HOME/.nix-defexpr/channels/nixpkgs" >> "$GITHUB_ENV"
+      - name: Run unit tests in nix shell
+        env:
+          CARGO_TERM_COLOR: always
+          RUST_BACKTRACE: 1
+        run: |
+          nix-shell -p rustc cargo pkg-config openssl --run "cargo test --all --all-features --locked"
+
+  macos:
+    name: macOS unit tests
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install system dependencies
+        run: |
+          brew update
+          brew install pkg-config openssl@3
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> "$GITHUB_ENV"
+      - name: Run unit tests
+        env:
+          CARGO_TERM_COLOR: always
+          RUST_BACKTRACE: 1
+        run: cargo test --all --all-features --locked
