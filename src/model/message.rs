@@ -224,16 +224,9 @@ mod tests {
             headers.clone(),
         );
         assert_eq!(strict.render.mode, "strict");
-        
-        let moderate = MessageSidecar::new(
-            "01B",
-            "b.eml",
-            "spam",
-            "moderate",
-            "b.html",
-            "h2",
-            headers,
-        );
+
+        let moderate =
+            MessageSidecar::new("01B", "b.eml", "spam", "moderate", "b.html", "h2", headers);
         assert_eq!(moderate.render.mode, "moderate");
     }
 
@@ -241,17 +234,49 @@ mod tests {
     fn sidecar_status_shadow_variations() {
         // Per spec: status_shadow tracks message list (accepted, spam, banned, quarantine)
         let headers = HeadersCache::new("Test", "Subject");
-        
-        let accepted = MessageSidecar::new("01A", "a.eml", "accepted", "strict", "a.html", "h1", headers.clone());
+
+        let accepted = MessageSidecar::new(
+            "01A",
+            "a.eml",
+            "accepted",
+            "strict",
+            "a.html",
+            "h1",
+            headers.clone(),
+        );
         assert_eq!(accepted.status_shadow, "accepted");
-        
-        let spam = MessageSidecar::new("01B", "b.eml", "spam", "strict", "b.html", "h2", headers.clone());
+
+        let spam = MessageSidecar::new(
+            "01B",
+            "b.eml",
+            "spam",
+            "strict",
+            "b.html",
+            "h2",
+            headers.clone(),
+        );
         assert_eq!(spam.status_shadow, "spam");
-        
-        let banned = MessageSidecar::new("01C", "c.eml", "banned", "strict", "c.html", "h3", headers.clone());
+
+        let banned = MessageSidecar::new(
+            "01C",
+            "c.eml",
+            "banned",
+            "strict",
+            "c.html",
+            "h3",
+            headers.clone(),
+        );
         assert_eq!(banned.status_shadow, "banned");
-        
-        let quarantine = MessageSidecar::new("01D", "d.eml", "quarantine", "strict", "d.html", "h4", headers);
+
+        let quarantine = MessageSidecar::new(
+            "01D",
+            "d.eml",
+            "quarantine",
+            "strict",
+            "d.html",
+            "h4",
+            headers,
+        );
         assert_eq!(quarantine.status_shadow, "quarantine");
     }
 
@@ -259,11 +284,13 @@ mod tests {
     fn sidecar_attachments_content_addressed() {
         // Per spec: attachments stored as sha256__<orig-name>
         let headers = HeadersCache::new("Test", "Subject");
-        let mut sidecar = MessageSidecar::new("01A", "a.eml", "accepted", "strict", "a.html", "h1", headers);
-        
+        let mut sidecar = MessageSidecar::new(
+            "01A", "a.eml", "accepted", "strict", "a.html", "h1", headers,
+        );
+
         sidecar.add_attachment("abc123def456", "invoice.pdf");
         sidecar.add_attachment("789xyz012", "receipt.png");
-        
+
         assert_eq!(sidecar.attachments.len(), 2);
         assert_eq!(sidecar.attachments[0].sha256, "abc123def456");
         assert_eq!(sidecar.attachments[0].name, "invoice.pdf");
@@ -274,25 +301,29 @@ mod tests {
     #[test]
     fn sidecar_touch_updates_last_activity() {
         let headers = HeadersCache::new("Test", "Subject");
-        let mut sidecar = MessageSidecar::new("01A", "a.eml", "accepted", "strict", "a.html", "h1", headers);
-        
+        let mut sidecar = MessageSidecar::new(
+            "01A", "a.eml", "accepted", "strict", "a.html", "h1", headers,
+        );
+
         let original_activity = sidecar.last_activity.clone();
         std::thread::sleep(std::time::Duration::from_millis(10));
         sidecar.touch();
-        
+
         assert_ne!(sidecar.last_activity, original_activity);
     }
 
     #[test]
     fn sidecar_mark_read_sets_flag_and_touches() {
         let headers = HeadersCache::new("Test", "Subject");
-        let mut sidecar = MessageSidecar::new("01A", "a.eml", "accepted", "strict", "a.html", "h1", headers);
-        
+        let mut sidecar = MessageSidecar::new(
+            "01A", "a.eml", "accepted", "strict", "a.html", "h1", headers,
+        );
+
         assert!(!sidecar.read);
         let original_activity = sidecar.last_activity.clone();
         std::thread::sleep(std::time::Duration::from_millis(10));
         sidecar.mark_read();
-        
+
         assert!(sidecar.read);
         assert_ne!(sidecar.last_activity, original_activity);
     }
@@ -311,13 +342,21 @@ mod tests {
     fn rspamd_summary_in_quarantine() {
         // Per spec: Rspamd scores displayed in Quarantine
         let headers = HeadersCache::new("Test", "Subject");
-        let mut sidecar = MessageSidecar::new("01A", "a.eml", "quarantine", "strict", "a.html", "h1", headers);
-        
+        let mut sidecar = MessageSidecar::new(
+            "01A",
+            "a.eml",
+            "quarantine",
+            "strict",
+            "a.html",
+            "h1",
+            headers,
+        );
+
         sidecar.set_rspamd(RspamdSummary {
             score: 7.5,
             symbols: vec!["DKIM_REJECT".to_string(), "SPF_FAIL".to_string()],
         });
-        
+
         assert!(sidecar.rspamd.is_some());
         let rspamd = sidecar.rspamd.unwrap();
         assert_eq!(rspamd.score, 7.5);

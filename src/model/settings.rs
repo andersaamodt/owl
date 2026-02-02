@@ -108,10 +108,10 @@ mod tests {
         // Per spec: body_format can be both|plain|html
         let both = ListSettings::parse("body_format=both").unwrap();
         assert_eq!(both.body_format, "both");
-        
+
         let plain = ListSettings::parse("body_format=plain").unwrap();
         assert_eq!(plain.body_format, "plain");
-        
+
         let html = ListSettings::parse("body_format=html").unwrap();
         assert_eq!(html.body_format, "html");
     }
@@ -121,13 +121,13 @@ mod tests {
         // Per spec: delete_after can be never|30d|6m|2y
         let never = ListSettings::parse("delete_after=never").unwrap();
         assert_eq!(never.delete_after, "never");
-        
+
         let days = ListSettings::parse("delete_after=30d").unwrap();
         assert_eq!(days.delete_after, "30d");
-        
+
         let months = ListSettings::parse("delete_after=6m").unwrap();
         assert_eq!(months.delete_after, "6m");
-        
+
         let years = ListSettings::parse("delete_after=2y").unwrap();
         assert_eq!(years.delete_after, "2y");
     }
@@ -137,16 +137,16 @@ mod tests {
         // Per spec: collapse_signatures is a boolean
         let true_val = ListSettings::parse("collapse_signatures=true").unwrap();
         assert!(true_val.collapse_signatures);
-        
+
         let one_val = ListSettings::parse("collapse_signatures=1").unwrap();
         assert!(one_val.collapse_signatures);
-        
+
         let yes_val = ListSettings::parse("collapse_signatures=yes").unwrap();
         assert!(yes_val.collapse_signatures);
-        
+
         let false_val = ListSettings::parse("collapse_signatures=false").unwrap();
         assert!(!false_val.collapse_signatures);
-        
+
         let other_val = ListSettings::parse("collapse_signatures=no").unwrap();
         assert!(!other_val.collapse_signatures);
     }
@@ -156,10 +156,10 @@ mod tests {
         // Per spec: list_status can be accepted|rejected|banned
         let accepted = ListSettings::parse("list_status=accepted").unwrap();
         assert_eq!(accepted.list_status, "accepted");
-        
+
         let rejected = ListSettings::parse("list_status=rejected").unwrap();
         assert_eq!(rejected.list_status, "rejected");
-        
+
         let banned = ListSettings::parse("list_status=banned").unwrap();
         assert_eq!(banned.list_status, "banned");
     }

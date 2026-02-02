@@ -171,10 +171,16 @@ mod tests {
         // Per spec: @=example.org matches exact domain only
         let rule = Rule::parse("@=example.org").unwrap();
         let addr = Address::parse("user@mail.example.org", false).unwrap();
-        assert!(!rule.matches(&addr), "Domain exact should not match subdomains");
-        
+        assert!(
+            !rule.matches(&addr),
+            "Domain exact should not match subdomains"
+        );
+
         let exact_addr = Address::parse("user@example.org", false).unwrap();
-        assert!(rule.matches(&exact_addr), "Domain exact should match exact domain");
+        assert!(
+            rule.matches(&exact_addr),
+            "Domain exact should match exact domain"
+        );
     }
 
     #[test]
@@ -184,7 +190,7 @@ mod tests {
         let rule = Rule::parse(r"/^support.*@example\.org$/").unwrap();
         let addr = Address::parse("support-tickets@example.org", false).unwrap();
         assert!(rule.matches(&addr));
-        
+
         let non_match = Address::parse("help@example.org", false).unwrap();
         assert!(!rule.matches(&non_match));
     }
