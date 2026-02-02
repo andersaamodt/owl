@@ -145,8 +145,10 @@ mod tests {
 
     #[test]
     fn parse_delete_after_negative_values() {
-        // Negative values should parse but are semantically invalid
-        // The parser accepts them (parse::<i64> succeeds)
+        // Negative values parse successfully (parse::<i64> accepts them)
+        // but would result in negative durations, which are semantically invalid.
+        // The retention_due() function handles this correctly since
+        // last_activity + negative_duration < now will always be true.
         assert!(parse_delete_after("-1d").is_some());
         assert!(parse_delete_after("-10y").is_some());
     }

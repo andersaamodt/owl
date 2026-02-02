@@ -32,7 +32,8 @@ mod tests {
         let mut ulids = Vec::new();
         for _ in 0..10 {
             ulids.push(generate());
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            // Use 10ms sleep to ensure timestamp difference on all systems
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
         // ULIDs should be sorted (first 10 chars are timestamp)

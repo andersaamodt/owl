@@ -59,16 +59,16 @@ mod tests {
 
     #[test]
     fn punycode_emoji_domain() {
-        // Emoji in domain (uncommon but valid)
+        // Emoji in domain labels: behavior is implementation-dependent
+        // The IDNA spec may allow or reject emoji depending on version
         let result = to_ascii("🎉.example.org");
-        // Should either encode or reject (implementation-dependent)
-        // The idna crate may reject this
-        assert!(result.is_ok() || result.is_err());
+        // Just ensure it doesn't panic - behavior depends on idna crate version
+        let _ = result;
     }
 
     #[test]
     fn punycode_case_normalized() {
-        // IDNA normalizes case
+        // IDNA normalizes case per spec
         let lower = to_ascii("café.org").unwrap();
         let upper = to_ascii("CAFÉ.ORG").unwrap();
         assert_eq!(lower, upper);
@@ -76,40 +76,40 @@ mod tests {
 
     #[test]
     fn punycode_very_long_label() {
-        // DNS labels have 63-char limit, punycode expansion can hit this
+        // DNS labels have 63-char limit; punycode can expand beyond this
+        // Test ensures no panic - actual behavior (accept/reject) is
+        // implementation-dependent based on label length after encoding
         let long_unicode = "a".repeat(50) + "ü";
         let domain = format!("{}.org", long_unicode);
         let result = to_ascii(&domain);
-        // May fail due to label length after punycode encoding
-        // Just ensure it doesn't panic
-        let _ = result;
+        let _ = result; // May succeed or fail depending on encoding length
     }
 
     #[test]
     fn punycode_chinese_characters() {
-        // Chinese domain
+        // Chinese domain should encode to punycode
         let domain = to_ascii("例え.jp").unwrap();
         assert!(domain.starts_with("xn--"));
     }
 
     #[test]
     fn punycode_arabic_characters() {
-        // Arabic domain
+        // Arabic domain should encode to punycode
         let domain = to_ascii("مثال.org").unwrap();
         assert!(domain.starts_with("xn--"));
     }
 
     #[test]
     fn punycode_empty_domain_behavior() {
-        // Empty string - check actual behavior (may accept or reject)
+        // Empty domain: implementation-dependent (may accept as valid or reject)
+        // Different IDNA implementations handle this differently
         let result = to_ascii("");
-        // idna crate may accept empty domains, so we just ensure it doesn't panic
-        let _ = result;
+        let _ = result; // Just ensure no panic
     }
 
     #[test]
     fn punycode_invalid_utf8_rejected() {
-        // Invalid UTF-8 in domain should be rejected
+        // Invalid UTF-8 sequences should be rejected per spec
         assert!(to_ascii("exa\u{80}.com").is_err());
     }
 }
