@@ -116,14 +116,14 @@ impl Logger {
     fn create_file(&self) -> Result<File> {
         let mut options = OpenOptions::new();
         options.create(true).append(true);
-        
+
         // Try to open with mode set (Unix systems)
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        
+
         let file = match options.open(&self.inner.path) {
             Ok(f) => f,
             Err(e) if e.raw_os_error() == Some(45) => {
@@ -134,7 +134,7 @@ impl Logger {
             }
             Err(e) => return Err(e.into()),
         };
-        
+
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
