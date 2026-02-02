@@ -233,4 +233,92 @@ mod tests {
         let removed2 = store.garbage_collect().unwrap();
         assert_eq!(removed2.len(), 0);
     }
+
+    #[test]
+    fn store_empty_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+
+        // Empty filename should still work (will be in format hash__)
+        let stored = store.store("", b"content").unwrap();
+        assert!(
+            stored
+                .path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("__")
+        );
+    }
+
+    #[test]
+    fn load_nonexistent_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+
+        let result = store.load("nonexistent_file.txt");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn gc_preserves_non_empty_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+
+        // Create non-empty file
+        let stored = store.store("keep.txt", b"content").unwrap();
+
+        // GC should not remove it
+        let removed = store.garbage_collect().unwrap();
+        assert_eq!(removed.len(), 0);
+
+        // File should still exist
+        assert!(stored.path.exists());
+    }
+
+    #[test]
+    fn store_unicode_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+
+        let stored = store.store("文档.txt", b"unicode").unwrap();
+        let filename = stored.path.file_name().unwrap().to_string_lossy();
+        assert!(filename.contains("文档.txt"));
+
+        let loaded = store.load(&filename).unwrap();
+        assert_eq!(loaded, b"unicode");
+    }
+
+    #[test]
+    fn attachment_meta_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+
+        let meta = store.store("test.pdf", b"data").unwrap();
+
+        // Should have sha256 and path
+        assert!(!meta.sha256.is_empty());
+        assert!(meta.path.exists());
+
+        // Filename should contain the original name
+        let filename = meta.path.file_name().unwrap().to_string_lossy();
+        assert!(filename.contains("test.pdf"));
+    }
+
+    #[test]
+    fn sha256_hash_correctness() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+
+        let content = b"test content";
+        let meta = store.store("file.txt", content).unwrap();
+
+        // Compute expected hash
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(content);
+        let expected = hex::encode(hasher.finalize());
+
+        assert_eq!(meta.sha256, expected);
+    }
 }

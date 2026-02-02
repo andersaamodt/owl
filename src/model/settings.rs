@@ -268,4 +268,132 @@ mod tests {
         assert_eq!(parsed.delete_after, settings.delete_after);
         assert_eq!(parsed.from, settings.from);
     }
+
+    #[test]
+    fn settings_unknown_key_error() {
+        let result = ListSettings::parse("unknown_key=value\n");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unknown key"));
+    }
+
+    #[test]
+    fn settings_missing_equals_error() {
+        let result = ListSettings::parse("invalid_line_no_equals\n");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid settings line")
+        );
+    }
+
+    #[test]
+    fn settings_empty_value() {
+        // Empty value should be accepted
+        let settings = ListSettings::parse("from=\n").unwrap();
+        assert_eq!(settings.from, Some("".to_string()));
+    }
+
+    #[test]
+    fn settings_whitespace_around_equals() {
+        let settings = ListSettings::parse("from = user@example.org \n").unwrap();
+        assert_eq!(settings.from, Some("user@example.org".to_string()));
+    }
+
+    #[test]
+    fn settings_value_with_equals() {
+        // Value can contain = signs
+        let settings = ListSettings::parse("signature=/path/to/sig=file.txt\n").unwrap();
+        assert_eq!(
+            settings.signature,
+            Some("/path/to/sig=file.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn settings_partial_update() {
+        // Parsing should update only specified keys
+        let settings = ListSettings::parse("body_format=html\n").unwrap();
+        assert_eq!(settings.body_format, "html");
+        // Other fields should have defaults
+        assert_eq!(settings.list_status, "accepted");
+        assert_eq!(settings.delete_after, "never");
+    }
+
+    #[test]
+    fn settings_yaml_serialization() {
+        let settings = ListSettings::default();
+        let yaml = serde_yaml::to_string(&settings).unwrap();
+        assert!(yaml.contains("list_status"));
+        assert!(yaml.contains("body_format"));
+    }
+
+    #[test]
+    fn settings_yaml_deserialization() {
+        let yaml = r#"
+list_status: spam
+delete_after: 30d
+from: null
+reply_to: null
+signature: null
+body_format: both
+collapse_signatures: true
+"#;
+        let settings: ListSettings = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(settings.list_status, "spam");
+        assert_eq!(settings.delete_after, "30d");
+    }
+
+    #[test]
+    fn settings_all_body_format_values() {
+        // Test all valid body_format values per spec
+        for format in ["both", "plain", "html"] {
+            let input = format!("body_format={}\n", format);
+            let settings = ListSettings::parse(&input).unwrap();
+            assert_eq!(settings.body_format, format);
+        }
+    }
+
+    #[test]
+    fn settings_all_list_status_values() {
+        // Test all valid list_status values per spec
+        for status in ["accepted", "rejected", "banned"] {
+            let input = format!("list_status={}\n", status);
+            let settings = ListSettings::parse(&input).unwrap();
+            assert_eq!(settings.list_status, status);
+        }
+    }
+
+    #[test]
+    fn settings_collapse_signatures_all_truthy() {
+        for value in ["true", "1", "yes"] {
+            let input = format!("collapse_signatures={}\n", value);
+            let settings = ListSettings::parse(&input).unwrap();
+            assert!(settings.collapse_signatures);
+        }
+    }
+
+    #[test]
+    fn settings_collapse_signatures_all_falsy() {
+        for value in ["false", "0", "no", "anything_else"] {
+            let input = format!("collapse_signatures={}\n", value);
+            let settings = ListSettings::parse(&input).unwrap();
+            assert!(!settings.collapse_signatures);
+        }
+    }
+
+    #[test]
+    fn settings_clone_equals_original() {
+        let settings = ListSettings::default();
+        let cloned = settings.clone();
+        assert_eq!(settings, cloned);
+    }
+
+    #[test]
+    fn settings_debug_format() {
+        let settings = ListSettings::default();
+        let debug = format!("{:?}", settings);
+        assert!(debug.contains("ListSettings"));
+    }
 }

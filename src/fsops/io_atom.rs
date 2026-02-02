@@ -192,4 +192,89 @@ mod tests {
         // Should be exactly the new content, not corrupted
         assert_eq!(result, "updated content");
     }
+
+    #[test]
+    fn write_atomic_empty_path_component() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file.txt");
+
+        write_atomic(&file, b"test").unwrap();
+        assert_eq!(read_to_string(&file).unwrap(), "test");
+    }
+
+    #[test]
+    fn write_atomic_preserves_exact_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("binary.dat");
+
+        // Test binary data with null bytes and all byte values
+        let binary: Vec<u8> = (0..=255).collect();
+        write_atomic(&file, &binary).unwrap();
+
+        let loaded = std::fs::read(&file).unwrap();
+        assert_eq!(loaded, binary);
+    }
+
+    #[test]
+    fn read_to_string_invalid_utf8() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("invalid.txt");
+
+        // Write invalid UTF-8
+        std::fs::write(&file, [0xFF, 0xFE, 0xFD]).unwrap();
+
+        let result = read_to_string(&file);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_atomic_zero_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("empty.txt");
+
+        write_atomic(&file, b"").unwrap();
+        assert_eq!(read_to_string(&file).unwrap(), "");
+        assert!(file.exists());
+    }
+
+    #[test]
+    fn write_atomic_creates_nested_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("level1").join("level2").join("file.txt");
+
+        // Parent directories don't exist yet
+        assert!(!nested.parent().unwrap().exists());
+
+        write_atomic(&nested, b"content").unwrap();
+
+        // Now they should exist
+        assert!(nested.parent().unwrap().exists());
+        assert_eq!(read_to_string(&nested).unwrap(), "content");
+    }
+
+    #[test]
+    fn write_atomic_multiple_sequential() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("multi.txt");
+
+        // Multiple writes should all succeed
+        for i in 0..10 {
+            let content = format!("version {}", i);
+            write_atomic(&file, content.as_bytes()).unwrap();
+            assert_eq!(read_to_string(&file).unwrap(), content);
+        }
+    }
+
+    #[test]
+    fn write_atomic_very_large_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("large.bin");
+
+        // 10MB file
+        let large = vec![b'X'; 10 * 1024 * 1024];
+        write_atomic(&file, &large).unwrap();
+
+        let loaded = std::fs::read(&file).unwrap();
+        assert_eq!(loaded.len(), large.len());
+    }
 }
