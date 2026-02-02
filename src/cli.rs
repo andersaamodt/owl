@@ -32,7 +32,11 @@ use anyhow::{Context, Result, anyhow, bail};
 #[derive(Parser, Debug, Clone)]
 #[command(name = "owl", version, about = "File-first mail system")]
 pub struct OwlCli {
-    #[arg(long, default_value = "/home/pi/mail/.env", help = "Path to the .env file")]
+    #[arg(
+        long,
+        default_value = "/home/pi/mail/.env",
+        help = "Path to the .env file"
+    )]
     pub env: String,
 
     #[command(subcommand)]
@@ -64,7 +68,10 @@ pub enum Commands {
     },
     #[command(about = "Show sender directories for one list or all lists")]
     ListSenders {
-        #[arg(long, help = "List to show senders from (quarantine, accepted, spam, banned)")]
+        #[arg(
+            long,
+            help = "List to show senders from (quarantine, accepted, spam, banned)"
+        )]
         list: Option<String>,
     },
     #[command(about = "Move all mail for a sender between lists")]
