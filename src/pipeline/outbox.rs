@@ -1107,15 +1107,14 @@ mod tests {
     }
 
     #[test]
-    fn markdown_to_text_empty_input() {
+    fn markdown_to_text_empty_and_whitespace() {
+        // Empty input
         let text = markdown_to_text("");
         assert_eq!(text, "");
-    }
 
-    #[test]
-    fn markdown_to_text_only_whitespace() {
-        let text = markdown_to_text("   \n\n   ");
-        assert_eq!(text, "");
+        // Whitespace only
+        let ws_text = markdown_to_text("   \n\n   ");
+        assert_eq!(ws_text, "");
     }
 
     #[test]

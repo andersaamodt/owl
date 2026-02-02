@@ -507,12 +507,12 @@ mod tests {
     #[test]
     fn attachment_meta_format() {
         let attachment = AttachmentMeta {
-            sha256: "abc123def456".to_string(),
+            sha256: "a".repeat(64), // SHA256 is 64 hex chars
             name: "document.pdf".to_string(),
         };
 
         // Per spec: attachments are content-addressed with sha256
-        assert_eq!(attachment.sha256.len(), 12); // example hash
+        assert_eq!(attachment.sha256.len(), 64);
         assert_eq!(attachment.name, "document.pdf");
     }
 }

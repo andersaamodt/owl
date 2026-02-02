@@ -472,12 +472,9 @@ mod tests {
         )
         .unwrap();
 
-        // Should handle gracefully (skip or error)
+        // Should error on parse failure
         let result = prune_directory(dir.path(), "30d", OffsetDateTime::now_utc());
-
-        // Either succeeds (skips bad files) or errors appropriately
-        // The current implementation will error on parse failure
-        assert!(result.is_ok() || result.is_err());
+        assert!(result.is_err(), "Expected error for malformed sidecar");
     }
 
     #[test]
