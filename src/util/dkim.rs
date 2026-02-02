@@ -189,7 +189,8 @@ fn set_private_permissions(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mut perms = fs::metadata(path)?.permissions();
     perms.set_mode(0o600);
-    fs::set_permissions(path, perms)?;
+    // Ignore permission errors on systems that don't support it (e.g., some macOS filesystems)
+    let _ = fs::set_permissions(path, perms);
     Ok(())
 }
 

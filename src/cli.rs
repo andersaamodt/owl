@@ -2074,7 +2074,8 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mut perms = fs::metadata(&path).unwrap().permissions();
             perms.set_mode(0o755);
-            fs::set_permissions(&path, perms).unwrap();
+            // Ignore permission errors on systems that don't support it
+            let _ = fs::set_permissions(&path, perms);
         }
     }
 
@@ -2429,7 +2430,8 @@ mod tests {
                 use std::os::unix::fs::PermissionsExt;
                 let mut perms = fs::metadata(&path).unwrap().permissions();
                 perms.set_mode(0o755);
-                fs::set_permissions(&path, perms).unwrap();
+                // Ignore permission errors on systems that don't support it
+                let _ = fs::set_permissions(&path, perms);
             }
         }
 
@@ -2472,7 +2474,8 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mut perms = fs::metadata(&exec).unwrap().permissions();
             perms.set_mode(0o755);
-            fs::set_permissions(&exec, perms).unwrap();
+            // Ignore permission errors on systems that don't support it
+            let _ = fs::set_permissions(&exec, perms);
         }
         let original = std::env::var_os("PATH");
         let mut new_path = std::ffi::OsString::from(dir.path());

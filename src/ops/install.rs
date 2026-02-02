@@ -118,7 +118,8 @@ fn create_letsencrypt_docs(layout: &MailLayout, env: &EnvConfig) -> Result<()> {
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = fs::Permissions::from_mode(0o700);
-        fs::set_permissions(hooks_dir.join("reload-postfix.sh"), perms)?;
+        // Ignore permission errors on systems that don't support it (e.g., some macOS filesystems)
+        let _ = fs::set_permissions(hooks_dir.join("reload-postfix.sh"), perms);
     }
     Ok(())
 }
@@ -290,7 +291,8 @@ mod tests {
                 use std::os::unix::fs::PermissionsExt;
                 let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
                 perms.set_mode(0o755);
-                std::fs::set_permissions(&script_path, perms).unwrap();
+                // Ignore permission errors on systems that don't support it
+                let _ = std::fs::set_permissions(&script_path, perms);
             }
         }
         let original_path = std::env::var_os("PATH");
@@ -349,7 +351,8 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mut perms = std::fs::metadata(&path).unwrap().permissions();
             perms.set_mode(0o755);
-            std::fs::set_permissions(&path, perms).unwrap();
+            // Ignore permission errors on systems that don't support it
+            let _ = std::fs::set_permissions(&path, perms);
         }
     }
 

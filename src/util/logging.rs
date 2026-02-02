@@ -70,7 +70,8 @@ impl Logger {
             {
                 use std::os::unix::fs::PermissionsExt;
                 let perms = fs::Permissions::from_mode(0o700);
-                fs::set_permissions(&logs_dir, perms)?;
+                // Ignore permission errors on systems that don't support it (e.g., some macOS filesystems)
+                let _ = fs::set_permissions(&logs_dir, perms);
             }
         }
         Ok(Self {
@@ -125,7 +126,8 @@ impl Logger {
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = fs::Permissions::from_mode(0o600);
-            fs::set_permissions(&self.inner.path, perms)?;
+            // Ignore permission errors on systems that don't support it (e.g., some macOS filesystems)
+            let _ = fs::set_permissions(&self.inner.path, perms);
         }
         Ok(file)
     }

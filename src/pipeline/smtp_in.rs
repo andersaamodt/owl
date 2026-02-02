@@ -324,7 +324,8 @@ mod tests {
         fs::write(&script_path, script_body).unwrap();
         let mut perms = fs::metadata(&script_path).unwrap().permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&script_path, perms).unwrap();
+        // Ignore permission errors on systems that don't support it
+        let _ = fs::set_permissions(&script_path, perms);
 
         let original = std::env::var_os("PATH");
         let mut new_path = std::ffi::OsString::from(script_dir.path());

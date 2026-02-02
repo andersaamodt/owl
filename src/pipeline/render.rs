@@ -38,7 +38,8 @@ mod tests {
         fs::write(&path, body).unwrap();
         let mut perms = fs::metadata(&path).unwrap().permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&path, perms).unwrap();
+        // Ignore permission errors on systems that don't support it
+        let _ = fs::set_permissions(&path, perms);
         path.to_string_lossy().into()
     }
 
