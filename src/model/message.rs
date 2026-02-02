@@ -515,4 +515,189 @@ mod tests {
         assert_eq!(attachment.sha256.len(), 64);
         assert_eq!(attachment.name, "document.pdf");
     }
+
+    #[test]
+    fn outbound_status_all_variants() {
+        // Per spec: OutboundStatus has Pending, Sent, Failed
+        let pending = OutboundStatus::Pending;
+        let sent = OutboundStatus::Sent;
+        let failed = OutboundStatus::Failed;
+
+        // Verify all variants exist
+        assert!(matches!(pending, OutboundStatus::Pending));
+        assert!(matches!(sent, OutboundStatus::Sent));
+        assert!(matches!(failed, OutboundStatus::Failed));
+    }
+
+    #[test]
+    fn render_mode_strict_and_moderate() {
+        // Per spec: render.mode can be "strict" or "moderate"
+        let headers = HeadersCache::new("Test", "Subject");
+        let strict = MessageSidecar::new(
+            "01A",
+            "a.eml",
+            "accepted",
+            "strict",
+            "a.html",
+            "h1",
+            headers.clone(),
+        );
+        assert_eq!(strict.render.mode, "strict");
+
+        let moderate = MessageSidecar::new(
+            "01B", "b.eml", "accepted", "moderate", "b.html", "h2", headers,
+        );
+        assert_eq!(moderate.render.mode, "moderate");
+    }
+
+    #[test]
+    fn sidecar_yaml_serialization_with_optional_fields() {
+        let headers = HeadersCache::new("Test", "Subject");
+        let mut sidecar = MessageSidecar::new(
+            "01A",
+            "a.eml",
+            "quarantine",
+            "strict",
+            "a.html",
+            "h1",
+            headers,
+        );
+
+        // Add optional fields
+        sidecar.set_rspamd(RspamdSummary {
+            score: 5.2,
+            symbols: vec!["SPF_FAIL".to_string(), "DKIM_REJECT".to_string()],
+        });
+        sidecar.history.push("quarantined".to_string());
+
+        // Serialize to YAML
+        let yaml = serde_yaml::to_string(&sidecar).unwrap();
+
+        // Should contain rspamd and history
+        assert!(yaml.contains("rspamd"));
+        assert!(yaml.contains("score: 5.2"));
+        assert!(yaml.contains("SPF_FAIL"));
+        assert!(yaml.contains("history"));
+        assert!(yaml.contains("quarantined"));
+    }
+
+    #[test]
+    fn sidecar_yaml_omits_none_optional_fields() {
+        let headers = HeadersCache::new("Test", "Subject");
+        let sidecar = MessageSidecar::new(
+            "01A", "a.eml", "accepted", "strict", "a.html", "h1", headers,
+        );
+
+        // Serialize to YAML
+        let yaml = serde_yaml::to_string(&sidecar).unwrap();
+
+        // Should NOT contain rspamd or outbound since they're None
+        assert!(!yaml.contains("rspamd:"));
+        assert!(!yaml.contains("outbound:"));
+    }
+
+    #[test]
+    fn rspamd_summary_empty_symbols() {
+        let rspamd = RspamdSummary {
+            score: 0.0,
+            symbols: vec![],
+        };
+
+        assert_eq!(rspamd.score, 0.0);
+        assert!(rspamd.symbols.is_empty());
+    }
+
+    #[test]
+    fn rspamd_summary_with_multiple_symbols() {
+        let rspamd = RspamdSummary {
+            score: 15.5,
+            symbols: vec![
+                "RCVD_IN_DNSWL_NONE".to_string(),
+                "DKIM_SIGNED".to_string(),
+                "SPF_PASS".to_string(),
+            ],
+        };
+
+        assert_eq!(rspamd.score, 15.5);
+        assert_eq!(rspamd.symbols.len(), 3);
+        assert!(rspamd.symbols.contains(&"SPF_PASS".to_string()));
+    }
+
+    #[test]
+    fn outbound_state_status_transitions() {
+        // Test typical status lifecycle: Pending -> Sent
+        let mut state = OutboundState::default();
+        assert!(matches!(state.status, OutboundStatus::Pending));
+
+        state.status = OutboundStatus::Sent;
+        assert!(matches!(state.status, OutboundStatus::Sent));
+
+        // Or: Pending -> Failed
+        state.status = OutboundStatus::Failed;
+        assert!(matches!(state.status, OutboundStatus::Failed));
+    }
+
+    #[test]
+    fn headers_cache_date_format() {
+        let headers = HeadersCache::new("Alice <alice@example.org>", "Test");
+
+        // date field should be populated with current time in RFC3339 format
+        assert!(!headers.date.is_empty());
+        assert!(OffsetDateTime::parse(&headers.date, &Rfc3339).is_ok());
+
+        // Can update it to a specific RFC 2822 format
+        let mut headers2 = headers.clone();
+        headers2.date = "Tue, 16 Sep 2025 23:12:33 -0700".to_string();
+        assert!(headers2.date.contains("2025"));
+    }
+
+    #[test]
+    fn status_shadow_all_list_types() {
+        // Per spec: status_shadow can be accepted, spam, banned, quarantine
+        let headers = HeadersCache::new("Test", "Subject");
+
+        let accepted = MessageSidecar::new(
+            "01A",
+            "a.eml",
+            "accepted",
+            "strict",
+            "a.html",
+            "h1",
+            headers.clone(),
+        );
+        assert_eq!(accepted.status_shadow, "accepted");
+
+        let spam = MessageSidecar::new(
+            "01B",
+            "b.eml",
+            "spam",
+            "strict",
+            "b.html",
+            "h2",
+            headers.clone(),
+        );
+        assert_eq!(spam.status_shadow, "spam");
+
+        let banned = MessageSidecar::new(
+            "01C",
+            "c.eml",
+            "banned",
+            "strict",
+            "c.html",
+            "h3",
+            headers.clone(),
+        );
+        assert_eq!(banned.status_shadow, "banned");
+
+        let quarantine = MessageSidecar::new(
+            "01D",
+            "d.eml",
+            "quarantine",
+            "strict",
+            "d.html",
+            "h4",
+            headers,
+        );
+        assert_eq!(quarantine.status_shadow, "quarantine");
+    }
 }
