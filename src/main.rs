@@ -8,7 +8,7 @@ use owl::{
 };
 use std::path::Path;
 
-fn execute(cli: OwlCli) -> anyhow::Result<()> {
+fn execute(mut cli: OwlCli) -> anyhow::Result<()> {
     let env = if cli.env.is_empty() {
         EnvConfig::default()
     } else {
@@ -19,6 +19,9 @@ fn execute(cli: OwlCli) -> anyhow::Result<()> {
             EnvConfig::default()
         }
     };
+    if cli.env.is_empty() {
+        cli.env = ".env".to_string();
+    }
     let output = run(cli.clone(), env)?;
     println!("{output}");
     Ok(())
@@ -117,9 +120,8 @@ mod tests {
         unsafe { std::env::remove_var("PATH") };
         with_fake_ops_env(|| ());
         assert!(std::env::var_os("PATH").is_none());
-        match original {
-            Some(path) => unsafe { std::env::set_var("PATH", path) },
-            None => {}
+        if let Some(path) = original {
+            unsafe { std::env::set_var("PATH", path) };
         }
     }
 

@@ -41,9 +41,7 @@ fn retention_respects_list_policies_and_cleans_attachments() {
         serde_yaml::to_string(&sidecar).unwrap(),
     )
     .unwrap();
-    let attachment_path = layout
-        .attachments("accepted")
-        .join("deadbeef__report.pdf");
+    let attachment_path = layout.attachments("accepted").join("deadbeef__report.pdf");
     std::fs::create_dir_all(layout.attachments("accepted")).unwrap();
     std::fs::write(&attachment_path, b"pdf").unwrap();
 
