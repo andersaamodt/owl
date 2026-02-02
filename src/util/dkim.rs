@@ -330,4 +330,130 @@ mod tests {
         assert!(header_value.contains("bh="));
         assert!(header_value.contains("b="));
     }
+
+    #[test]
+    fn canonicalize_body_multiple_trailing_blank_lines() {
+        let body = b"content\r\n\r\n\r\n\r\n";
+        let canonical = canonicalize_body_simple(body);
+        // Should reduce to single trailing CRLF
+        assert_eq!(canonical, b"content\r\n");
+    }
+
+    #[test]
+    fn canonicalize_body_preserves_internal_blank_lines() {
+        let body = b"para1\r\n\r\npara2\r\n";
+        let canonical = canonicalize_body_simple(body);
+        assert_eq!(canonical, b"para1\r\n\r\npara2\r\n");
+    }
+
+    #[test]
+    fn extract_header_case_insensitive() {
+        let raw = "Subject: test\r\n";
+        assert!(extract_header(raw, "subject").is_some());
+        assert!(extract_header(raw, "Subject").is_some());
+        assert!(extract_header(raw, "SUBJECT").is_some());
+    }
+
+    #[test]
+    fn extract_header_with_folded_continuation() {
+        let raw = "Subject: Long subject\r\n that continues\r\n  on multiple lines\r\n\r\n";
+        let header = extract_header(raw, "subject").unwrap();
+        assert!(header.contains("Long subject"));
+        assert!(header.contains("that continues"));
+        assert!(header.contains("on multiple lines"));
+    }
+
+    #[test]
+    fn extract_header_missing_returns_none() {
+        let raw = "From: alice@example.org\r\n";
+        assert!(extract_header(raw, "subject").is_none());
+    }
+
+    #[test]
+    fn collect_signed_headers_with_all_required() {
+        let raw = "From: alice@example.org\r\nTo: bob@example.org\r\nSubject: test\r\n\r\n";
+        let headers = collect_signed_headers(raw, &["from", "to", "subject"]).unwrap();
+        assert_eq!(headers.len(), 3);
+    }
+
+    #[test]
+    fn collect_signed_headers_preserves_order() {
+        let raw = "Subject: test\r\nFrom: alice@example.org\r\nTo: bob@example.org\r\n\r\n";
+        let headers = collect_signed_headers(raw, &["subject", "from", "to"]).unwrap();
+        // Should preserve the order requested
+        assert!(headers[0].starts_with("Subject:"));
+        assert!(headers[1].starts_with("From:"));
+        assert!(headers[2].starts_with("To:"));
+    }
+
+    #[test]
+    fn signer_with_empty_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let material = ensure_ed25519_keypair(dir.path(), "mail").unwrap();
+        let signer = DkimSigner::from_material(&material).unwrap();
+        let headers = "From: alice@example.org\r\n\r\n";
+        let body = b"";
+
+        let dkim_header = signer
+            .sign("example.org", headers, body, &["from"])
+            .unwrap();
+
+        assert!(dkim_header.contains("bh="));
+    }
+
+    #[test]
+    fn signer_with_large_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let material = ensure_ed25519_keypair(dir.path(), "mail").unwrap();
+        let signer = DkimSigner::from_material(&material).unwrap();
+        let headers = "From: alice@example.org\r\n\r\n";
+
+        // Large body (100KB)
+        let large_body = vec![b'x'; 100 * 1024];
+
+        let dkim_header = signer
+            .sign("example.org", headers, &large_body, &["from"])
+            .unwrap();
+
+        assert!(dkim_header.contains("b="));
+    }
+
+    #[test]
+    fn ensure_keypair_creates_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("dkim");
+
+        let material = ensure_ed25519_keypair(&subdir, "mail").unwrap();
+        assert!(subdir.exists());
+        assert!(material.private_key_path.exists());
+    }
+
+    #[test]
+    fn dns_record_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let material = ensure_ed25519_keypair(dir.path(), "mail").unwrap();
+        let dns = fs::read_to_string(&material.dns_record_path).unwrap();
+
+        // Per spec: v=DKIM1; k=ed25519; p=<pubkey>
+        assert!(dns.starts_with("v=DKIM1"));
+        assert!(dns.contains("k=ed25519"));
+        assert!(dns.contains(&format!("p={}", material.public_key)));
+    }
+
+    #[test]
+    fn signer_with_binary_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let material = ensure_ed25519_keypair(dir.path(), "mail").unwrap();
+        let signer = DkimSigner::from_material(&material).unwrap();
+        let headers = "From: alice@example.org\r\n\r\n";
+
+        // Binary body with non-UTF8 bytes
+        let binary_body = vec![0xFF, 0xFE, 0x00, 0x01, 0xAB, 0xCD];
+
+        let dkim_header = signer
+            .sign("example.org", headers, &binary_body, &["from"])
+            .unwrap();
+
+        assert!(dkim_header.contains("b="));
+    }
 }

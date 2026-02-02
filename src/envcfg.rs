@@ -275,4 +275,288 @@ mod tests {
         let env = cfg.to_env_string();
         assert!(env.contains("smtp_host=127.0.0.1"));
     }
+
+    #[test]
+    fn retry_backoff_spec_default() {
+        // Per spec: default is "1m,5m,15m,1h"
+        let cfg = EnvConfig::default();
+        assert_eq!(cfg.retry_backoff, vec!["1m", "5m", "15m", "1h"]);
+    }
+
+    #[test]
+    fn retry_backoff_custom_parsing() {
+        let cfg: EnvConfig = "retry_backoff=30s,2m,10m,1h,6h\n".parse().unwrap();
+        assert_eq!(cfg.retry_backoff, vec!["30s", "2m", "10m", "1h", "6h"]);
+    }
+
+    #[test]
+    fn retry_backoff_whitespace_trimmed() {
+        let cfg: EnvConfig = "retry_backoff= 1m , 5m , 15m \n".parse().unwrap();
+        assert_eq!(cfg.retry_backoff, vec!["1m", "5m", "15m"]);
+    }
+
+    #[test]
+    fn retry_backoff_empty_entries_filtered() {
+        // Empty entries should be filtered out
+        let cfg: EnvConfig = "retry_backoff=1m,,5m,\n".parse().unwrap();
+        assert_eq!(cfg.retry_backoff, vec!["1m", "5m"]);
+    }
+
+    #[test]
+    fn retry_backoff_empty_list_uses_default() {
+        // Empty list should fall back to default
+        let cfg: EnvConfig = "retry_backoff=\n".parse().unwrap();
+        assert_eq!(cfg.retry_backoff, vec!["1m", "5m", "15m", "1h"]);
+
+        let cfg2: EnvConfig = "retry_backoff=,,,\n".parse().unwrap();
+        assert_eq!(cfg2.retry_backoff, vec!["1m", "5m", "15m", "1h"]);
+    }
+
+    #[test]
+    fn max_size_quarantine_spec_default() {
+        // Per spec: quarantine cap is 25M
+        let cfg = EnvConfig::default();
+        assert_eq!(cfg.max_size_quarantine, "25M");
+    }
+
+    #[test]
+    fn max_size_approved_spec_default() {
+        // Per spec: approved default cap is 50M
+        let cfg = EnvConfig::default();
+        assert_eq!(cfg.max_size_approved_default, "50M");
+    }
+
+    #[test]
+    fn max_size_custom_values() {
+        let cfg: EnvConfig = "max_size_quarantine=10M\nmax_size_approved_default=100M\n"
+            .parse()
+            .unwrap();
+        assert_eq!(cfg.max_size_quarantine, "10M");
+        assert_eq!(cfg.max_size_approved_default, "100M");
+    }
+
+    #[test]
+    fn logging_levels_spec_values() {
+        // Per spec: off | minimal | verbose_sanitized | verbose_full
+        let off: EnvConfig = "logging=off\n".parse().unwrap();
+        assert_eq!(off.logging, "off");
+
+        let minimal: EnvConfig = "logging=minimal\n".parse().unwrap();
+        assert_eq!(minimal.logging, "minimal");
+
+        let sanitized: EnvConfig = "logging=verbose_sanitized\n".parse().unwrap();
+        assert_eq!(sanitized.logging, "verbose_sanitized");
+
+        let full: EnvConfig = "logging=verbose_full\n".parse().unwrap();
+        assert_eq!(full.logging, "verbose_full");
+    }
+
+    #[test]
+    fn render_mode_spec_values() {
+        // Per spec: strict | moderate
+        let strict: EnvConfig = "render_mode=strict\n".parse().unwrap();
+        assert_eq!(strict.render_mode, "strict");
+
+        let moderate: EnvConfig = "render_mode=moderate\n".parse().unwrap();
+        assert_eq!(moderate.render_mode, "moderate");
+    }
+
+    #[test]
+    fn keep_plus_tags_boolean_variations() {
+        // Test all truthy values
+        let t1: EnvConfig = "keep_plus_tags=true\n".parse().unwrap();
+        assert!(t1.keep_plus_tags);
+
+        let t2: EnvConfig = "keep_plus_tags=1\n".parse().unwrap();
+        assert!(t2.keep_plus_tags);
+
+        let t3: EnvConfig = "keep_plus_tags=yes\n".parse().unwrap();
+        assert!(t3.keep_plus_tags);
+
+        // Test falsy values
+        let f1: EnvConfig = "keep_plus_tags=false\n".parse().unwrap();
+        assert!(!f1.keep_plus_tags);
+
+        let f2: EnvConfig = "keep_plus_tags=0\n".parse().unwrap();
+        assert!(!f2.keep_plus_tags);
+
+        let f3: EnvConfig = "keep_plus_tags=no\n".parse().unwrap();
+        assert!(!f3.keep_plus_tags);
+    }
+
+    #[test]
+    fn smtp_starttls_boolean_variations() {
+        let t: EnvConfig = "smtp_starttls=true\n".parse().unwrap();
+        assert!(t.smtp_starttls);
+
+        let f: EnvConfig = "smtp_starttls=false\n".parse().unwrap();
+        assert!(!f.smtp_starttls);
+    }
+
+    #[test]
+    fn load_external_boolean_variations() {
+        let t: EnvConfig = "load_external_per_message=true\n".parse().unwrap();
+        assert!(t.load_external_per_message);
+
+        let f: EnvConfig = "load_external_per_message=false\n".parse().unwrap();
+        assert!(!f.load_external_per_message);
+    }
+
+    #[test]
+    fn smtp_port_custom_value() {
+        let cfg: EnvConfig = "smtp_port=587\n".parse().unwrap();
+        assert_eq!(cfg.smtp_port, 587);
+    }
+
+    #[test]
+    fn smtp_port_invalid_uses_default() {
+        let cfg: EnvConfig = "smtp_port=invalid\n".parse().unwrap();
+        assert_eq!(cfg.smtp_port, 25); // default
+    }
+
+    #[test]
+    fn dmarc_policy_spec_values() {
+        // Common DMARC policy values
+        let none: EnvConfig = "dmarc_policy=none\n".parse().unwrap();
+        assert_eq!(none.dmarc_policy, "none");
+
+        let quarantine: EnvConfig = "dmarc_policy=quarantine\n".parse().unwrap();
+        assert_eq!(quarantine.dmarc_policy, "quarantine");
+
+        let reject: EnvConfig = "dmarc_policy=reject\n".parse().unwrap();
+        assert_eq!(reject.dmarc_policy, "reject");
+    }
+
+    #[test]
+    fn case_insensitive_keys() {
+        // Keys should be lowercased
+        let cfg: EnvConfig = "LOGGING=off\nLogging=verbose_full\n".parse().unwrap();
+        // Last value wins
+        assert_eq!(cfg.logging, "verbose_full");
+    }
+
+    #[test]
+    fn whitespace_in_values_preserved() {
+        let cfg: EnvConfig = "contacts_dir= /home/pi/contacts \n".parse().unwrap();
+        assert_eq!(cfg.contacts_dir, "/home/pi/contacts");
+    }
+
+    #[test]
+    fn empty_config_uses_defaults() {
+        let cfg: EnvConfig = "".parse().unwrap();
+        assert_eq!(cfg.dmarc_policy, "none");
+        assert_eq!(cfg.dkim_selector, "mail");
+        assert_eq!(cfg.max_size_quarantine, "25M");
+        assert_eq!(cfg.logging, "minimal");
+        assert!(!cfg.keep_plus_tags);
+    }
+
+    #[test]
+    fn config_with_only_comments() {
+        let cfg: EnvConfig = "# comment 1\n# comment 2\n".parse().unwrap();
+        // Should match defaults except for smtp_host which is Some in default but not parsed
+        assert_eq!(cfg.dmarc_policy, EnvConfig::default().dmarc_policy);
+        assert_eq!(cfg.logging, EnvConfig::default().logging);
+        assert_eq!(cfg.keep_plus_tags, EnvConfig::default().keep_plus_tags);
+        // smtp_host is None when parsed from empty config
+        assert_eq!(cfg.smtp_host, None);
+    }
+
+    #[test]
+    fn invalid_line_without_equals() {
+        let result: Result<EnvConfig, _> = "invalid_line".parse();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid line"));
+    }
+
+    #[test]
+    fn multiple_equals_in_value() {
+        // Value can contain = signs
+        let cfg: EnvConfig = "smtp_password=pass=word=123\n".parse().unwrap();
+        assert_eq!(cfg.smtp_password, Some("pass=word=123".to_string()));
+    }
+
+    #[test]
+    fn smtp_optional_fields() {
+        let cfg: EnvConfig = "smtp_host=mail.example.org\nsmtp_username=user\n"
+            .parse()
+            .unwrap();
+        assert_eq!(cfg.smtp_host, Some("mail.example.org".to_string()));
+        assert_eq!(cfg.smtp_username, Some("user".to_string()));
+        assert_eq!(cfg.smtp_password, None); // Not set
+    }
+
+    #[test]
+    fn smtp_port_defaults_to_25() {
+        let cfg: EnvConfig = "".parse().unwrap();
+        assert_eq!(cfg.smtp_port, 25);
+    }
+
+    #[test]
+    fn empty_value_for_optional_string() {
+        // Empty value should set Some("")
+        let cfg: EnvConfig = "smtp_host=\n".parse().unwrap();
+        assert_eq!(cfg.smtp_host, Some("".to_string()));
+    }
+
+    #[test]
+    fn retry_backoff_empty_list() {
+        // If not specified, uses default
+        let cfg: EnvConfig = "".parse().unwrap();
+        assert_eq!(cfg.retry_backoff, vec!["1m", "5m", "15m", "1h"]);
+    }
+
+    #[test]
+    fn retry_backoff_single_value() {
+        let cfg: EnvConfig = "retry_backoff=30s\n".parse().unwrap();
+        assert_eq!(cfg.retry_backoff, vec!["30s"]);
+    }
+
+    #[test]
+    fn retry_backoff_custom_values() {
+        let cfg: EnvConfig = "retry_backoff=1m,10m,1h,6h\n".parse().unwrap();
+        assert_eq!(cfg.retry_backoff, vec!["1m", "10m", "1h", "6h"]);
+    }
+
+    #[test]
+    fn letsencrypt_method_variations() {
+        let http: EnvConfig = "letsencrypt_method=http\n".parse().unwrap();
+        assert_eq!(http.letsencrypt_method, "http");
+
+        let dns: EnvConfig = "letsencrypt_method=dns\n".parse().unwrap();
+        assert_eq!(dns.letsencrypt_method, "dns");
+    }
+
+    #[test]
+    fn from_file_with_tempfile() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "logging=off\nkeep_plus_tags=true\n").unwrap();
+
+        let cfg = EnvConfig::from_file(&path).unwrap();
+        assert_eq!(cfg.logging, "off");
+        assert!(cfg.keep_plus_tags);
+    }
+
+    #[test]
+    fn from_file_missing_returns_error() {
+        let path = Path::new("/nonexistent/path/.env");
+        let result = EnvConfig::from_file(path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn config_clone_equals_original() {
+        let cfg = EnvConfig::default();
+        let cloned = cfg.clone();
+        assert_eq!(cfg, cloned);
+    }
+
+    #[test]
+    fn config_debug_format() {
+        let cfg = EnvConfig::default();
+        let debug = format!("{:?}", cfg);
+        assert!(debug.contains("EnvConfig"));
+        assert!(debug.contains("dmarc_policy"));
+    }
 }

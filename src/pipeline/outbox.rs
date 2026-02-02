@@ -556,6 +556,73 @@ mod tests {
     }
 
     #[test]
+    fn next_delay_backoff_progression() {
+        // Per spec: retry_backoff=1m,5m,15m,1h
+        let schedule = vec![
+            Duration::minutes(1),
+            Duration::minutes(5),
+            Duration::minutes(15),
+            Duration::hours(1),
+        ];
+
+        // First attempt (0) -> no delay
+        // Second attempt (1) -> first delay (1m)
+        assert_eq!(next_delay(1, &schedule), Duration::minutes(1));
+        assert_eq!(next_delay(2, &schedule), Duration::minutes(5));
+        assert_eq!(next_delay(3, &schedule), Duration::minutes(15));
+        assert_eq!(next_delay(4, &schedule), Duration::hours(1));
+
+        // Beyond schedule length: use last value
+        assert_eq!(next_delay(5, &schedule), Duration::hours(1));
+        assert_eq!(next_delay(100, &schedule), Duration::hours(1));
+    }
+
+    #[test]
+    fn next_delay_first_attempt_uses_first_delay() {
+        let schedule = vec![Duration::seconds(30), Duration::minutes(2)];
+        // Attempt 1 uses schedule[0]
+        assert_eq!(next_delay(1, &schedule), Duration::seconds(30));
+    }
+
+    #[test]
+    fn parse_retry_schedule_spec_default() {
+        // Default config should give us the spec default schedule
+        let env = EnvConfig::default();
+        let schedule = parse_retry_schedule(&env);
+        assert_eq!(schedule.len(), 4);
+        assert_eq!(schedule[0], Duration::minutes(1));
+        assert_eq!(schedule[1], Duration::minutes(5));
+        assert_eq!(schedule[2], Duration::minutes(15));
+        assert_eq!(schedule[3], Duration::hours(1));
+    }
+
+    #[test]
+    fn parse_retry_schedule_custom_values() {
+        let env = EnvConfig {
+            retry_backoff: vec!["30s".into(), "2m".into(), "10m".into()],
+            ..EnvConfig::default()
+        };
+        let schedule = parse_retry_schedule(&env);
+        assert_eq!(schedule.len(), 3);
+        assert_eq!(schedule[0], Duration::seconds(30));
+        assert_eq!(schedule[1], Duration::minutes(2));
+        assert_eq!(schedule[2], Duration::minutes(10));
+    }
+
+    #[test]
+    fn parse_retry_schedule_filters_invalid_and_keeps_valid() {
+        let env = EnvConfig {
+            retry_backoff: vec!["1m".into(), "invalid".into(), "5m".into(), "bad".into()],
+            ..EnvConfig::default()
+        };
+        let schedule = parse_retry_schedule(&env);
+        // Should only have the 2 valid entries
+        assert_eq!(schedule.len(), 2);
+        assert_eq!(schedule[0], Duration::minutes(1));
+        assert_eq!(schedule[1], Duration::minutes(5));
+    }
+
+    #[test]
     fn split_headers_body_reports_missing_marker() {
         let err = split_headers_body(b"Subject: hi").unwrap_err();
         assert!(err.to_string().contains("separator"));
@@ -952,6 +1019,161 @@ mod tests {
 
         let err = split_front_matter("---\nsubject: hi\n").expect_err("missing closing delimiter");
         assert!(format!("{err}").contains("closing front matter delimiter"));
+    }
+
+    #[test]
+    fn draft_empty_file_errors() {
+        let err = split_front_matter("").expect_err("empty draft");
+        assert!(format!("{err}").contains("draft is empty"));
+    }
+
+    #[test]
+    fn draft_from_file_with_invalid_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("01ARZ3NDEKTSV4RRFFQ69G5FAV.md");
+        fs::write(&path, "---\nsubject: [\ninvalid: yaml\n---\nbody\n").unwrap();
+        let err = Draft::from_file(&path).expect_err("expected yaml parse failure");
+        // Should propagate serde_yaml error (format varies, just check it fails)
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn draft_from_file_with_multiple_recipients() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("01ARZ3NDEKTSV4RRFFQ69G5FAV.md");
+        fs::write(
+            &path,
+            "---\nsubject: Multi\nfrom: alice@example.org\nto:\n  - bob@example.org\n  - carol@example.org\ncc:\n  - dave@example.org\n---\nbody\n",
+        )
+        .unwrap();
+        let draft = Draft::from_file(&path).unwrap();
+        assert_eq!(draft.to.len(), 2);
+        assert_eq!(draft.cc.len(), 1);
+        assert_eq!(draft.subject, "Multi");
+    }
+
+    #[test]
+    fn draft_from_file_with_empty_subject() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("01ARZ3NDEKTSV4RRFFQ69G5FAV.md");
+        fs::write(
+            &path,
+            "---\nsubject: \"\"\nfrom: alice@example.org\nto:\n  - bob@example.org\n---\nbody\n",
+        )
+        .unwrap();
+        let draft = Draft::from_file(&path).unwrap();
+        assert_eq!(draft.subject, "");
+    }
+
+    #[test]
+    fn markdown_to_html_basic() {
+        let html = markdown_to_html("# Heading\n\nParagraph with **bold** and *italic*.");
+        assert!(html.contains("<h1>"));
+        assert!(html.contains("Heading"));
+        assert!(html.contains("<strong>"));
+        assert!(html.contains("bold"));
+        assert!(html.contains("<em>"));
+        assert!(html.contains("italic"));
+    }
+
+    #[test]
+    fn markdown_to_html_code_blocks() {
+        let html = markdown_to_html("```rust\nfn main() {}\n```");
+        assert!(html.contains("<code"));
+        assert!(html.contains("fn main"));
+    }
+
+    #[test]
+    fn markdown_to_html_links() {
+        let html = markdown_to_html("[Click here](https://example.org)");
+        assert!(html.contains("<a"));
+        assert!(html.contains("href=\"https://example.org\""));
+        assert!(html.contains("Click here"));
+    }
+
+    #[test]
+    fn markdown_to_html_nested_lists() {
+        let html = markdown_to_html("- Item 1\n  - Nested 1\n  - Nested 2\n- Item 2");
+        assert!(html.contains("<li>"));
+        assert!(html.contains("Item 1"));
+        assert!(html.contains("Nested 1"));
+    }
+
+    #[test]
+    fn markdown_to_text_preserves_code() {
+        let text = markdown_to_text("`inline code` and normal text");
+        assert!(text.contains("inline code"));
+        assert!(text.contains("normal text"));
+    }
+
+    #[test]
+    fn markdown_to_text_empty_and_whitespace() {
+        // Empty input
+        let text = markdown_to_text("");
+        assert_eq!(text, "");
+
+        // Whitespace only
+        let ws_text = markdown_to_text("   \n\n   ");
+        assert_eq!(ws_text, "");
+    }
+
+    #[test]
+    fn parse_mailbox_with_display_name() {
+        let mb = parse_mailbox("Alice Smith <alice@example.org>").unwrap();
+        assert_eq!(mb.email.to_string(), "alice@example.org");
+        assert_eq!(mb.name.as_deref(), Some("Alice Smith"));
+    }
+
+    #[test]
+    fn parse_mailbox_without_display_name() {
+        let mb = parse_mailbox("bob@example.org").unwrap();
+        assert_eq!(mb.email.to_string(), "bob@example.org");
+        assert!(mb.name.is_none());
+    }
+
+    #[test]
+    fn parse_mailbox_invalid_format() {
+        let err = parse_mailbox("not-an-email").expect_err("expected parse failure");
+        assert!(format!("{err}").contains("invalid address"));
+    }
+
+    #[test]
+    fn parse_mailboxes_with_mixed_formats() {
+        let addrs = vec![
+            "alice@example.org".to_string(),
+            "Bob <bob@example.org>".to_string(),
+        ];
+        let mailboxes = parse_mailboxes(&addrs).unwrap();
+        assert_eq!(mailboxes.len(), 2);
+        assert_eq!(mailboxes[0].email.to_string(), "alice@example.org");
+        assert_eq!(mailboxes[1].email.to_string(), "bob@example.org");
+    }
+
+    #[test]
+    fn split_front_matter_with_extra_dashes() {
+        // Should handle front matter with whitespace around delimiters
+        let (front, body) = split_front_matter("---  \nsubject: test\n---\nbody text").unwrap();
+        assert!(front.contains("subject: test"));
+        assert_eq!(body, "body text");
+    }
+
+    #[test]
+    fn draft_from_file_missing_domain_in_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("01ARZ3NDEKTSV4RRFFQ69G5FAV.md");
+        // This should fail if we could somehow get a from without @
+        // But lettre's Mailbox parser should catch it first
+        fs::write(
+            &path,
+            "---\nsubject: hi\nfrom: alice\nto:\n  - bob@example.org\n---\nbody\n",
+        )
+        .unwrap();
+        let err = Draft::from_file(&path).expect_err("expected invalid from");
+        // Should fail on mailbox parsing
+        assert!(
+            format!("{err}").contains("invalid address")
+                || format!("{err}").contains("missing domain")
+        );
     }
 
     #[test]

@@ -379,4 +379,159 @@ mod tests {
         let err = Logger::load_entries(&path).unwrap_err();
         assert!(err.to_string().contains("failed to parse log line 1"));
     }
+
+    #[test]
+    fn log_level_spec_values() {
+        // Per spec: off | minimal | verbose_sanitized | verbose_full
+        assert_eq!(LogLevel::from_str("off").unwrap(), LogLevel::Off);
+        assert_eq!(LogLevel::from_str("minimal").unwrap(), LogLevel::Minimal);
+        assert_eq!(
+            LogLevel::from_str("verbose_sanitized").unwrap(),
+            LogLevel::VerboseSanitized
+        );
+        assert_eq!(
+            LogLevel::from_str("verbose_full").unwrap(),
+            LogLevel::VerboseFull
+        );
+    }
+
+    #[test]
+    fn log_level_ordering() {
+        // Ordering: Off < Minimal < VerboseSanitized < VerboseFull
+        assert!(LogLevel::Off < LogLevel::Minimal);
+        assert!(LogLevel::Minimal < LogLevel::VerboseSanitized);
+        assert!(LogLevel::VerboseSanitized < LogLevel::VerboseFull);
+    }
+
+    #[test]
+    fn log_level_allows_checks() {
+        // Off allows nothing
+        assert!(!LogLevel::Off.allows(LogLevel::Minimal));
+        assert!(!LogLevel::Off.allows(LogLevel::VerboseFull));
+
+        // Minimal allows minimal, not verbose
+        assert!(LogLevel::Minimal.allows(LogLevel::Minimal));
+        assert!(!LogLevel::Minimal.allows(LogLevel::VerboseSanitized));
+        assert!(!LogLevel::Minimal.allows(LogLevel::VerboseFull));
+
+        // VerboseSanitized allows minimal and sanitized, not full
+        assert!(LogLevel::VerboseSanitized.allows(LogLevel::Minimal));
+        assert!(LogLevel::VerboseSanitized.allows(LogLevel::VerboseSanitized));
+        assert!(!LogLevel::VerboseSanitized.allows(LogLevel::VerboseFull));
+
+        // VerboseFull allows all
+        assert!(LogLevel::VerboseFull.allows(LogLevel::Minimal));
+        assert!(LogLevel::VerboseFull.allows(LogLevel::VerboseSanitized));
+        assert!(LogLevel::VerboseFull.allows(LogLevel::VerboseFull));
+    }
+
+    #[test]
+    fn minimal_level_filters_verbose_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let logger = Logger::new(dir.path(), LogLevel::Minimal).unwrap();
+
+        // Minimal event should be logged
+        logger
+            .log(LogLevel::Minimal, "minimal_event", None)
+            .unwrap();
+
+        // Verbose events should be filtered
+        logger
+            .log(LogLevel::VerboseSanitized, "verbose_sanitized_event", None)
+            .unwrap();
+        logger
+            .log(LogLevel::VerboseFull, "verbose_full_event", None)
+            .unwrap();
+
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].message, "minimal_event");
+    }
+
+    #[test]
+    fn verbose_sanitized_includes_minimal() {
+        let dir = tempfile::tempdir().unwrap();
+        let logger = Logger::new(dir.path(), LogLevel::VerboseSanitized).unwrap();
+
+        logger.log(LogLevel::Minimal, "minimal", None).unwrap();
+        logger
+            .log(LogLevel::VerboseSanitized, "sanitized", None)
+            .unwrap();
+        logger.log(LogLevel::VerboseFull, "full", None).unwrap();
+
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].message, "minimal");
+        assert_eq!(entries[1].message, "sanitized");
+    }
+
+    #[test]
+    fn verbose_full_includes_all_levels() {
+        let dir = tempfile::tempdir().unwrap();
+        let logger = Logger::new(dir.path(), LogLevel::VerboseFull).unwrap();
+
+        logger.log(LogLevel::Minimal, "minimal", None).unwrap();
+        logger
+            .log(LogLevel::VerboseSanitized, "sanitized", None)
+            .unwrap();
+        logger.log(LogLevel::VerboseFull, "full", None).unwrap();
+
+        let entries = Logger::load_entries(&logger.log_path()).unwrap();
+        assert_eq!(entries.len(), 3);
+    }
+
+    #[test]
+    fn log_entry_format_with_detail() {
+        let entry = LogEntry::new(
+            LogLevel::VerboseFull,
+            "outbox_retry",
+            Some("attempt=3 next=5m"),
+        );
+        let formatted = entry.format_human();
+
+        assert!(formatted.contains("outbox_retry"));
+        assert!(formatted.contains("attempt=3 next=5m"));
+        assert!(formatted.contains("::"));
+    }
+
+    #[test]
+    fn log_entry_format_without_detail() {
+        let entry = LogEntry::new(LogLevel::Minimal, "simple_event", None);
+        let formatted = entry.format_human();
+
+        assert!(formatted.contains("simple_event"));
+        assert!(!formatted.contains("::"));
+    }
+
+    #[test]
+    fn log_entry_empty_detail_omitted() {
+        let entry = LogEntry::new(LogLevel::Minimal, "event", Some(""));
+        let formatted = entry.format_human();
+
+        // Empty detail should be omitted (no :: separator)
+        assert!(!formatted.contains("::"));
+    }
+
+    #[test]
+    fn logger_creates_logs_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let logger = Logger::new(dir.path(), LogLevel::Minimal).unwrap();
+
+        let logs_dir = dir.path().join("logs");
+        assert!(logs_dir.exists());
+        assert!(logs_dir.is_dir());
+
+        // Log path should be inside logs dir
+        assert!(logger.log_path().starts_with(&logs_dir));
+    }
+
+    #[test]
+    fn off_level_does_not_create_logs_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let _logger = Logger::new(dir.path(), LogLevel::Off).unwrap();
+
+        let logs_dir = dir.path().join("logs");
+        // Off level should not create logs directory
+        assert!(!logs_dir.exists());
+    }
 }

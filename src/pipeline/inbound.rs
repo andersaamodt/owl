@@ -87,4 +87,70 @@ mod tests {
         let err = determine_route(&sender, &rules, &EnvConfig::default()).unwrap_err();
         assert!(err.to_string().contains("unknown list_status"));
     }
+
+    #[test]
+    fn map_status_all_valid_values() {
+        assert_eq!(map_status("accepted").unwrap(), Route::Accepted);
+        assert_eq!(map_status("rejected").unwrap(), Route::Spam);
+        assert_eq!(map_status("banned").unwrap(), Route::Banned);
+    }
+
+    #[test]
+    fn map_status_case_sensitive() {
+        // Should be case-sensitive
+        let err = map_status("Accepted").expect_err("expected error");
+        assert!(err.to_string().contains("unknown list_status"));
+    }
+
+    #[test]
+    fn map_status_rejects_quarantine() {
+        // "quarantine" is not a valid list_status value
+        let err = map_status("quarantine").expect_err("expected error");
+        assert!(err.to_string().contains("unknown list_status"));
+    }
+
+    #[test]
+    fn accepted_list_with_banned_status() {
+        // Accepted list with banned status = route to banned
+        let sender = Address::parse("alice@example.org", false).unwrap();
+        let mut rules = LoadedRules::default();
+        rules.accepted.rules = RuleSet::parse("@example.org").unwrap();
+        rules.accepted.settings.list_status = "banned".into();
+
+        let route = determine_route(&sender, &rules, &EnvConfig::default()).unwrap();
+        assert_eq!(route, Route::Banned);
+    }
+
+    #[test]
+    fn spam_list_with_accepted_status() {
+        // Spam list with accepted status = promote to accepted
+        let sender = Address::parse("alice@spam.org", false).unwrap();
+        let mut rules = LoadedRules::default();
+        rules.spam.rules = RuleSet::parse("@spam.org").unwrap();
+        rules.spam.settings.list_status = "accepted".into();
+
+        let route = determine_route(&sender, &rules, &EnvConfig::default()).unwrap();
+        assert_eq!(route, Route::Accepted);
+    }
+
+    #[test]
+    fn quarantine_never_has_settings_override() {
+        // Quarantine doesn't use settings (no .rules/.settings files)
+        let sender = Address::parse("unknown@nowhere.org", false).unwrap();
+        let rules = LoadedRules::default();
+
+        let route = determine_route(&sender, &rules, &EnvConfig::default()).unwrap();
+        assert_eq!(route, Route::Quarantine);
+    }
+
+    #[test]
+    fn unicode_domain_routing() {
+        let sender = Address::parse("user@café.example.org", false).unwrap();
+        let mut rules = LoadedRules::default();
+        // Domain should be punycoded in canonicalization
+        rules.accepted.rules = RuleSet::parse("@xn--caf-dma.example.org").unwrap();
+
+        let route = determine_route(&sender, &rules, &EnvConfig::default()).unwrap();
+        assert_eq!(route, Route::Accepted);
+    }
 }

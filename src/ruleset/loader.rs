@@ -133,4 +133,121 @@ mod tests {
         assert_eq!(rules.spam.settings.list_status, "rejected");
         assert_eq!(rules.banned.settings.list_status, "banned");
     }
+
+    #[test]
+    fn default_settings_for_each_list() {
+        assert_eq!(default_settings_for("accepted").list_status, "accepted");
+        assert_eq!(default_settings_for("spam").list_status, "rejected");
+        assert_eq!(default_settings_for("banned").list_status, "banned");
+        assert_eq!(default_settings_for("unknown").list_status, "accepted"); // fallback
+    }
+
+    #[test]
+    fn loads_all_three_lists() {
+        let dir = tempfile::tempdir().unwrap();
+        let loader = RulesetLoader::new(dir.path());
+        let rules = loader.load().unwrap();
+
+        // All three lists should be loaded
+        assert!(rules.accepted.rules.rules().is_empty());
+        assert!(rules.spam.rules.rules().is_empty());
+        assert!(rules.banned.rules.rules().is_empty());
+    }
+
+    #[test]
+    fn loads_rules_with_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("accepted/.rules");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "# Comment\n@example.org\n\n# Another comment\n/spam/\n",
+        )
+        .unwrap();
+
+        let loader = RulesetLoader::new(dir.path());
+        let rules = loader.load().unwrap();
+
+        // Should have 2 rules (comments ignored)
+        assert_eq!(rules.accepted.rules.rules().len(), 2);
+    }
+
+    #[test]
+    fn loads_settings_with_all_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("spam/.settings");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "list_status=accepted\ndelete_after=30d\nfrom=Team <team@example.org>\nbody_format=plain\n",
+        )
+        .unwrap();
+
+        let loader = RulesetLoader::new(dir.path());
+        let rules = loader.load().unwrap();
+
+        assert_eq!(rules.spam.settings.list_status, "accepted");
+        assert_eq!(rules.spam.settings.delete_after, "30d");
+        assert_eq!(
+            rules.spam.settings.from,
+            Some("Team <team@example.org>".to_string())
+        );
+        assert_eq!(rules.spam.settings.body_format, "plain");
+    }
+
+    #[test]
+    fn loader_with_invalid_rules_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("accepted/.rules");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "/invalid[regex/\n").unwrap();
+
+        let loader = RulesetLoader::new(dir.path());
+        let result = loader.load();
+
+        // Should error on invalid regex
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn loader_with_invalid_settings_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("accepted/.settings");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "invalid line without equals\n").unwrap();
+
+        let loader = RulesetLoader::new(dir.path());
+        let result = loader.load();
+
+        // Should error on invalid settings
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn loader_with_empty_rules_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("banned/.rules");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "").unwrap();
+
+        let loader = RulesetLoader::new(dir.path());
+        let rules = loader.load().unwrap();
+
+        // Empty file = empty ruleset
+        assert!(rules.banned.rules.rules().is_empty());
+    }
+
+    #[test]
+    fn loader_with_only_whitespace_in_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let rules_path = dir.path().join("accepted/.rules");
+        std::fs::create_dir_all(rules_path.parent().unwrap()).unwrap();
+        std::fs::write(&rules_path, "   \n\n   \n").unwrap();
+
+        let loader = RulesetLoader::new(dir.path());
+        let rules = loader.load().unwrap();
+
+        // Whitespace-only should be treated as empty
+        assert!(rules.accepted.rules.rules().is_empty());
+    }
 }

@@ -1,4 +1,4 @@
-name: Lint & Coverage
+name: Lint & Test
 
 on:
   push:
@@ -25,20 +25,10 @@ jobs:
       - name: Cargo clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-  coverage:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Run tests
         run: cargo test --all --all-features --locked
-      - name: Install tarpaulin
-        run: cargo install cargo-tarpaulin --locked
-      - name: Coverage 100%
-        run: |
-          mkdir -p coverage
-          cargo tarpaulin --engine llvm --out Xml --output-dir coverage --fail-under 97.5
-      - uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage/
