@@ -65,13 +65,22 @@ impl Logger {
         let root = root.into();
         let logs_dir = root.join("logs");
         if level != LogLevel::Off {
-            fs::create_dir_all(&logs_dir)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let perms = fs::Permissions::from_mode(0o700);
-                // Ignore permission errors on systems that don't support it (e.g., some macOS filesystems)
-                let _ = fs::set_permissions(&logs_dir, perms);
+            // Try to create logs directory - may fail with EOPNOTSUPP on some macOS filesystems
+            match fs::create_dir_all(&logs_dir) {
+                Ok(()) => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let perms = fs::Permissions::from_mode(0o700);
+                        // Ignore permission errors on systems that don't support it (e.g., some macOS filesystems)
+                        let _ = fs::set_permissions(&logs_dir, perms);
+                    }
+                }
+                Err(e) if e.raw_os_error() == Some(45) => {
+                    // EOPNOTSUPP on macOS - directory creation not supported
+                    // Continue without creating directory, log file operations will be skipped
+                }
+                Err(e) => return Err(e.into()),
             }
         }
         Ok(Self {
@@ -99,21 +108,47 @@ impl Logger {
 
         let mut guard = self.inner.file.lock();
         if guard.is_none() {
-            *guard = Some(self.create_file()?);
+            // Try to create file, but don't fail if we can't (e.g., EOPNOTSUPP)
+            match self.create_file() {
+                Ok(file) => *guard = Some(file),
+                Err(_) => {
+                    // Can't create log file (e.g., due to EOPNOTSUPP or missing directory)
+                    // Continue without logging
+                    return Ok(());
+                }
+            }
         }
 
         if let Some(file) = guard.as_mut() {
             let entry = LogEntry::new(event_level, message.as_ref(), detail);
             let line = serde_json::to_string(&entry)?;
-            file.write_all(line.as_bytes())?;
-            file.write_all(b"\n")?;
-            file.flush()?;
+            // If writing fails, ignore it and continue
+            let _ = file.write_all(line.as_bytes());
+            let _ = file.write_all(b"\n");
+            let _ = file.flush();
         }
 
         Ok(())
     }
 
     fn create_file(&self) -> Result<File> {
+        // First, ensure parent directory exists
+        if let Some(parent) = self.inner.path.parent()
+            && !parent.exists()
+        {
+            match fs::create_dir_all(parent) {
+                Ok(()) => {}
+                Err(e) if e.raw_os_error() == Some(45) => {
+                    // EOPNOTSUPP - can't create directory on this filesystem
+                    // Return a dummy error that will be caught by log()
+                    return Err(anyhow::anyhow!(
+                        "Cannot create log directory on this filesystem (EOPNOTSUPP)"
+                    ));
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
         let mut options = OpenOptions::new();
         options.create(true).append(true);
 
