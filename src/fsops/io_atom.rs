@@ -10,10 +10,27 @@ pub fn create_dir_all(path: &Path) -> Result<()> {
     match fs::create_dir_all(path) {
         Ok(()) => Ok(()),
         Err(e) if e.raw_os_error() == Some(45) => {
-            // EOPNOTSUPP on macOS - filesystem doesn't support directory creation
-            // This can happen on certain APFS configurations
-            // Continue as if successful - operations will fail later if directory truly needed
-            Ok(())
+            // EOPNOTSUPP on macOS - the operation may have partially succeeded
+            // Check if the directory actually exists now
+            if path.exists() && path.is_dir() {
+                // Directory was created despite the error
+                Ok(())
+            } else {
+                // Directory wasn't created - try creating parent and then this directory
+                // This can happen if the permission-setting operation failed
+                if let Some(parent) = path.parent()
+                    && !parent.exists()
+                {
+                    // Recursively create parent without setting permissions
+                    create_dir_all(parent)?;
+                }
+                // Try creating just this directory (not setting permissions)
+                match fs::create_dir(path) {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+                    Err(e) => Err(e.into()),
+                }
+            }
         }
         Err(e) => Err(e.into()),
     }
