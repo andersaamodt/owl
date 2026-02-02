@@ -14,7 +14,7 @@ use tar::{Archive, Builder};
 use crate::{
     envcfg::EnvConfig,
     fsops::{
-        io_atom::{create_dir_all, write_atomic},
+        io_atom::{create_dir_all, create_file, write_atomic},
         layout::MailLayout,
     },
     model::{address::Address, message::MessageSidecar},
@@ -866,7 +866,7 @@ fn backup_mail(env_path: &Path, target: &Path) -> Result<String> {
     {
         create_dir_all(parent)?;
     }
-    let file = File::create(target).with_context(|| format!("creating {}", target.display()))?;
+    let file = create_file(target).with_context(|| format!("creating {}", target.display()))?;
     let encoder = GzEncoder::new(file, Compression::default());
     let mut builder = Builder::new(encoder);
     builder.append_dir_all(".", &root)?;
@@ -896,7 +896,7 @@ fn export_sender(
     {
         create_dir_all(parent)?;
     }
-    let file = File::create(target).with_context(|| format!("creating {}", target.display()))?;
+    let file = create_file(target).with_context(|| format!("creating {}", target.display()))?;
     let encoder = GzEncoder::new(file, Compression::default());
     let mut builder = Builder::new(encoder);
     builder.append_dir_all(format!("{list_name}/{canonical}"), &sender_dir)?;

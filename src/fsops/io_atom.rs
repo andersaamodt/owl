@@ -90,6 +90,23 @@ pub fn read_to_string(path: &Path) -> Result<String> {
     Ok(buf)
 }
 
+/// Create a file, handling EOPNOTSUPP on macOS
+pub fn create_file(path: &Path) -> Result<File> {
+    match File::create(path) {
+        Ok(f) => Ok(f),
+        Err(e) if e.raw_os_error() == Some(45) => {
+            // EOPNOTSUPP on macOS - retry with OpenOptions without trying to set mode
+            fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(path)
+                .map_err(|e| e.into())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
