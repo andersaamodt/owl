@@ -440,4 +440,123 @@ mod tests {
         let cfg: EnvConfig = "contacts_dir= /home/pi/contacts \n".parse().unwrap();
         assert_eq!(cfg.contacts_dir, "/home/pi/contacts");
     }
+
+    #[test]
+    fn empty_config_uses_defaults() {
+        let cfg: EnvConfig = "".parse().unwrap();
+        assert_eq!(cfg.dmarc_policy, "none");
+        assert_eq!(cfg.dkim_selector, "mail");
+        assert_eq!(cfg.max_size_quarantine, "25M");
+        assert_eq!(cfg.logging, "minimal");
+        assert!(!cfg.keep_plus_tags);
+    }
+
+    #[test]
+    fn config_with_only_comments() {
+        let cfg: EnvConfig = "# comment 1\n# comment 2\n".parse().unwrap();
+        // Should match defaults except for smtp_host which is Some in default but not parsed
+        assert_eq!(cfg.dmarc_policy, EnvConfig::default().dmarc_policy);
+        assert_eq!(cfg.logging, EnvConfig::default().logging);
+        assert_eq!(cfg.keep_plus_tags, EnvConfig::default().keep_plus_tags);
+        // smtp_host is None when parsed from empty config
+        assert_eq!(cfg.smtp_host, None);
+    }
+
+    #[test]
+    fn invalid_line_without_equals() {
+        let result: Result<EnvConfig, _> = "invalid_line".parse();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid line"));
+    }
+
+    #[test]
+    fn multiple_equals_in_value() {
+        // Value can contain = signs
+        let cfg: EnvConfig = "smtp_password=pass=word=123\n".parse().unwrap();
+        assert_eq!(cfg.smtp_password, Some("pass=word=123".to_string()));
+    }
+
+    #[test]
+    fn smtp_optional_fields() {
+        let cfg: EnvConfig = "smtp_host=mail.example.org\nsmtp_username=user\n"
+            .parse()
+            .unwrap();
+        assert_eq!(cfg.smtp_host, Some("mail.example.org".to_string()));
+        assert_eq!(cfg.smtp_username, Some("user".to_string()));
+        assert_eq!(cfg.smtp_password, None); // Not set
+    }
+
+    #[test]
+    fn smtp_port_defaults_to_25() {
+        let cfg: EnvConfig = "".parse().unwrap();
+        assert_eq!(cfg.smtp_port, 25);
+    }
+
+    #[test]
+    fn empty_value_for_optional_string() {
+        // Empty value should set Some("")
+        let cfg: EnvConfig = "smtp_host=\n".parse().unwrap();
+        assert_eq!(cfg.smtp_host, Some("".to_string()));
+    }
+
+    #[test]
+    fn retry_backoff_empty_list() {
+        // If not specified, uses default
+        let cfg: EnvConfig = "".parse().unwrap();
+        assert_eq!(cfg.retry_backoff, vec!["1m", "5m", "15m", "1h"]);
+    }
+
+    #[test]
+    fn retry_backoff_single_value() {
+        let cfg: EnvConfig = "retry_backoff=30s\n".parse().unwrap();
+        assert_eq!(cfg.retry_backoff, vec!["30s"]);
+    }
+
+    #[test]
+    fn retry_backoff_custom_values() {
+        let cfg: EnvConfig = "retry_backoff=1m,10m,1h,6h\n".parse().unwrap();
+        assert_eq!(cfg.retry_backoff, vec!["1m", "10m", "1h", "6h"]);
+    }
+
+    #[test]
+    fn letsencrypt_method_variations() {
+        let http: EnvConfig = "letsencrypt_method=http\n".parse().unwrap();
+        assert_eq!(http.letsencrypt_method, "http");
+
+        let dns: EnvConfig = "letsencrypt_method=dns\n".parse().unwrap();
+        assert_eq!(dns.letsencrypt_method, "dns");
+    }
+
+    #[test]
+    fn from_file_with_tempfile() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "logging=off\nkeep_plus_tags=true\n").unwrap();
+
+        let cfg = EnvConfig::from_file(&path).unwrap();
+        assert_eq!(cfg.logging, "off");
+        assert!(cfg.keep_plus_tags);
+    }
+
+    #[test]
+    fn from_file_missing_returns_error() {
+        let path = Path::new("/nonexistent/path/.env");
+        let result = EnvConfig::from_file(path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn config_clone_equals_original() {
+        let cfg = EnvConfig::default();
+        let cloned = cfg.clone();
+        assert_eq!(cfg, cloned);
+    }
+
+    #[test]
+    fn config_debug_format() {
+        let cfg = EnvConfig::default();
+        let debug = format!("{:?}", cfg);
+        assert!(debug.contains("EnvConfig"));
+        assert!(debug.contains("dmarc_policy"));
+    }
 }
