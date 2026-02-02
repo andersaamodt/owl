@@ -26,15 +26,17 @@ jobs:
       - name: Build Linux targets
         run: |
           set -euo pipefail
-          mkdir -p dist
           for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown-linux-gnueabihf; do
             cross build --release --target "$target" --bins
-            for bin in owl owl-daemon; do
-              src="target/$target/release/$bin"
-              out="dist/${bin}-${target}"
-              cp "$src" "$out"
-              sha256sum "$out" > "${out}.sha256"
-            done
+            # Create target-specific directory
+            dist_dir="dist/linux-${target}"
+            mkdir -p "$dist_dir"
+            # Copy owl binary
+            cp "target/$target/release/owl" "$dist_dir/owl"
+            sha256sum "$dist_dir/owl" > "$dist_dir/owl.sha256"
+            # Copy owl-daemon binary as owld
+            cp "target/$target/release/owl-daemon" "$dist_dir/owld"
+            sha256sum "$dist_dir/owld" > "$dist_dir/owld.sha256"
           done
       - uses: actions/upload-artifact@v4
         with:
@@ -61,15 +63,20 @@ jobs:
       - name: Build macOS artifacts
         run: |
           set -euo pipefail
+          # Get the target architecture (e.g., aarch64-apple-darwin or x86_64-apple-darwin)
           target=$(rustc -vV | awk '/^host:/ {print $2}')
-          mkdir -p dist
+          # Extract just the architecture part (aarch64 or x86_64)
+          arch=$(echo "$target" | cut -d'-' -f1)
+          # Create target-specific directory with simplified name
+          dist_dir="dist/macos-${arch}"
+          mkdir -p "$dist_dir"
           cargo build --release --locked --bins
-          for bin in owl owl-daemon; do
-            src="target/release/$bin"
-            out="dist/${bin}-${target}"
-            cp "$src" "$out"
-            shasum -a 256 "$out" > "${out}.sha256"
-          done
+          # Copy owl binary
+          cp "target/release/owl" "$dist_dir/owl"
+          shasum -a 256 "$dist_dir/owl" > "$dist_dir/owl.sha256"
+          # Copy owl-daemon binary as owld
+          cp "target/release/owl-daemon" "$dist_dir/owld"
+          shasum -a 256 "$dist_dir/owld" > "$dist_dir/owld.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: owl-binaries-macos-${{ matrix.os }}
