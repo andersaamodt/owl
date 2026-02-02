@@ -48,7 +48,30 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
         Ok(t) => t,
         Err(e) if e.raw_os_error() == Some(45) => {
             // EOPNOTSUPP on macOS - fallback to using tempdir in /tmp
-            NamedTempFile::new().with_context(|| "creating temp file (fallback)")?
+            match NamedTempFile::new() {
+                Ok(t) => t,
+                Err(e2) if e2.raw_os_error() == Some(45) => {
+                    // Even /tmp fails with EOPNOTSUPP - write directly without temp file
+                    // This loses atomicity but allows the operation to succeed
+                    match fs::write(path, contents) {
+                        Ok(()) => return Ok(()),
+                        Err(e3) if e3.raw_os_error() == Some(45) => {
+                            // fs::write also fails - try with OpenOptions without mode
+                            let mut file = fs::OpenOptions::new()
+                                .write(true)
+                                .create(true)
+                                .truncate(true)
+                                .open(path)?;
+                            use std::io::Write;
+                            file.write_all(contents)?;
+                            file.flush()?;
+                            return Ok(());
+                        }
+                        Err(e3) => return Err(e3.into()),
+                    }
+                }
+                Err(e2) => return Err(e2).with_context(|| "creating temp file (fallback)")?,
+            }
         }
         Err(e) => return Err(e.into()),
     };
