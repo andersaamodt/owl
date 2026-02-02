@@ -6,7 +6,11 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     envcfg::EnvConfig,
-    fsops::{attach::AttachmentStore, io_atom::write_atomic, layout::MailLayout},
+    fsops::{
+        attach::AttachmentStore,
+        io_atom::{create_dir_all, write_atomic},
+        layout::MailLayout,
+    },
     model::{
         address::Address,
         filename::{html_filename, message_filename, sidecar_filename},
@@ -127,9 +131,9 @@ impl InboundPipeline {
         subject: &str,
         body: &[u8],
     ) -> Result<PathBuf> {
-        std::fs::create_dir_all(base)?;
+        create_dir_all(base)?;
         let dir = base.join(sender.canonical());
-        std::fs::create_dir_all(&dir)?;
+        create_dir_all(&dir)?;
         let ulid = ulid::generate();
         let message_name = message_filename(subject, &ulid);
         let sidecar_name = sidecar_filename(subject, &ulid);

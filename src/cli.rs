@@ -13,7 +13,10 @@ use tar::{Archive, Builder};
 
 use crate::{
     envcfg::EnvConfig,
-    fsops::{io_atom::write_atomic, layout::MailLayout},
+    fsops::{
+        io_atom::{create_dir_all, write_atomic},
+        layout::MailLayout,
+    },
     model::{address::Address, message::MessageSidecar},
     ops::install as ops_install,
     pipeline::{
@@ -236,7 +239,7 @@ fn configure(env_path: &Path, env: &EnvConfig, logger: &Logger) -> Result<String
         Some(default_root.to_string_lossy().as_ref()),
     )?;
     let mail_root = PathBuf::from(mail_root);
-    fs::create_dir_all(&mail_root)?;
+    create_dir_all(&mail_root)?;
 
     let default_env = if env_path.as_os_str().is_empty() {
         mail_root.join(".env")
@@ -692,7 +695,7 @@ fn move_sender(
     }
 
     if let Some(parent) = dest_dir.parent() {
-        fs::create_dir_all(parent)?;
+        create_dir_all(parent)?;
     }
     fs::rename(&source_dir, &dest_dir)?;
 
@@ -701,7 +704,7 @@ fn move_sender(
     if keep_attachments {
         let source_attachments = layout.attachments(from_list);
         let dest_attachments = layout.attachments(to_list);
-        fs::create_dir_all(&dest_attachments)?;
+        create_dir_all(&dest_attachments)?;
         for attachment in attachments {
             let src = source_attachments.join(&attachment);
             if !src.exists() {
@@ -861,7 +864,7 @@ fn backup_mail(env_path: &Path, target: &Path) -> Result<String> {
     if let Some(parent) = target.parent()
         && !parent.as_os_str().is_empty()
     {
-        fs::create_dir_all(parent)?;
+        create_dir_all(parent)?;
     }
     let file = File::create(target).with_context(|| format!("creating {}", target.display()))?;
     let encoder = GzEncoder::new(file, Compression::default());
@@ -891,7 +894,7 @@ fn export_sender(
     if let Some(parent) = target.parent()
         && !parent.as_os_str().is_empty()
     {
-        fs::create_dir_all(parent)?;
+        create_dir_all(parent)?;
     }
     let file = File::create(target).with_context(|| format!("creating {}", target.display()))?;
     let encoder = GzEncoder::new(file, Compression::default());
@@ -1286,7 +1289,7 @@ fn upsert_env_setting(env_path: &Path, key: &str, value: &str) -> Result<()> {
 
 fn set_rules_entry(path: &Path, entry: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        create_dir_all(parent)?;
     }
     if path.exists() {
         let data = fs::read_to_string(path)?;
@@ -1316,7 +1319,7 @@ fn set_settings_file(
     list_status: &str,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        create_dir_all(parent)?;
     }
     let settings = format!(
         "list_status={list_status}\n\
@@ -1394,7 +1397,7 @@ mod tests {
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
         let sender_dir = layout.quarantine().join("alice@example.org");
-        fs::create_dir_all(&sender_dir).unwrap();
+        create_dir_all(&sender_dir).unwrap();
         let subject = "Greetings";
         let ulid = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
         let mut sidecar = MessageSidecar::new(
@@ -1436,7 +1439,7 @@ mod tests {
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
         let sender_dir = layout.accepted().join("carol@example.org");
-        fs::create_dir_all(&sender_dir).unwrap();
+        create_dir_all(&sender_dir).unwrap();
         let subject = "Follow up";
         let ulid = "01ARZ3NDEKTSV4RRFFQ69G5FD0";
         let mut sidecar = MessageSidecar::new(
@@ -1504,7 +1507,7 @@ mod tests {
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
         let sender_dir = layout.accepted().join("bob@example.org");
-        fs::create_dir_all(&sender_dir).unwrap();
+        create_dir_all(&sender_dir).unwrap();
         let ulid = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
         let mut sidecar = MessageSidecar::new(
             ulid,

@@ -10,7 +10,7 @@ use ring::{
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
-use crate::fsops::io_atom::write_atomic;
+use crate::fsops::io_atom::{create_dir_all, write_atomic};
 
 #[derive(Debug, Clone)]
 pub struct DkimMaterial {
@@ -22,7 +22,7 @@ pub struct DkimMaterial {
 }
 
 pub fn ensure_ed25519_keypair(dir: &Path, selector: &str) -> Result<DkimMaterial> {
-    fs::create_dir_all(dir)?;
+    create_dir_all(dir)?;
     let private = dir.join(format!("{selector}.private"));
     let public = dir.join(format!("{selector}.public"));
     let dns = dir.join(format!("{selector}.dns"));
