@@ -219,10 +219,8 @@ fn configure(env_path: &Path, env: &EnvConfig, logger: &Logger) -> Result<String
         Some(default_env.to_string_lossy().as_ref()),
     )?;
     let env_path = PathBuf::from(env_path);
-    if !env_path.exists() {
-        if prompt_yes_no(&mut input, &mut output, "Create env file now?", true)? {
-            setup_env(&mut input, &mut output, &env_path, env)?;
-        }
+    if !env_path.exists() && prompt_yes_no(&mut input, &mut output, "Create env file now?", true)? {
+        setup_env(&mut input, &mut output, &env_path, env)?;
     }
 
     loop {
@@ -1232,12 +1230,12 @@ fn upsert_env_setting(env_path: &Path, key: &str, value: &str) -> Result<()> {
                 lines.push(line.to_string());
                 continue;
             }
-            if let Some((k, _)) = line.split_once('=') {
-                if k.trim() == key {
-                    lines.push(format!("{key}={value}"));
-                    found = true;
-                    continue;
-                }
+            if let Some((k, _)) = line.split_once('=')
+                && k.trim() == key
+            {
+                lines.push(format!("{key}={value}"));
+                found = true;
+                continue;
             }
             lines.push(line.to_string());
         }

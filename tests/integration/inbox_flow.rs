@@ -73,8 +73,11 @@ fn delivers_to_accepted_route() {
 
 #[test]
 fn cli_runs_triage_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join(".env");
+    std::fs::write(&env_path, "logging=off\n").unwrap();
     let cli = OwlCli {
-        env: "".into(),
+        env: env_path.to_string_lossy().into(),
         command: Some(Commands::Reload),
         json: false,
     };
