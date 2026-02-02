@@ -37,7 +37,7 @@ Set `OWL_REPO` if you are using a fork:
 curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/install.sh | OWL_REPO=<owner>/<repo> sh
 ```
 
-After install, the script can launch the interactive configuration wizard found at `scripts/configure.sh`.
+After install, the script can launch the built-in configuration wizard via `owl configure`.
 
 Run the background workers with the companion daemon binary:
 

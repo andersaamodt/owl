@@ -191,15 +191,14 @@ main() {
   fi
 
   if prompt_yes_no "Would you like to configure Owl now?" "y"; then
-    script_dir=$(dirname "$0")
-    if [ -x "$script_dir/configure.sh" ]; then
-      "$script_dir/configure.sh"
+    if command -v owl >/dev/null 2>&1; then
+      owl configure
     else
-      log "Configuration wizard not found locally."
-      log "Run: curl -fsSL https://raw.githubusercontent.com/$OWL_REPO/main/scripts/configure.sh | sh"
+      log "Configuration wizard requires the owl binary on PATH."
+      log "Run: owl configure"
     fi
   else
-    log "Configuration skipped. You can run: scripts/configure.sh"
+    log "Configuration skipped. You can run: owl configure"
   fi
 }
 

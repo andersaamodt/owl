@@ -42,6 +42,15 @@ Reload routing rules without restarting the daemon.
 owl reload
 ```
 
+### `owl configure`
+
+Run the interactive configuration wizard for env settings, routing rules, and list defaults.
+
+```
+owl configure
+owl configure --env /path/to/.env
+```
+
 ### `owl triage [--address A] [--list L]`
 
 List messages in quarantine (default) or a specific list.

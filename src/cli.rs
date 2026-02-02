@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
-    io::{BufRead, BufReader},
+    io::{self, BufRead, BufReader, Write},
     path::{Path, PathBuf},
 };
 use tar::{Archive, Builder};
@@ -89,6 +89,7 @@ pub enum Commands {
         #[arg(value_enum, default_value_t = LogAction::Show)]
         action: LogAction,
     },
+    Configure,
 }
 
 #[derive(ValueEnum, Clone, Debug, Default)]
@@ -136,6 +137,7 @@ pub fn run(cli: OwlCli, env: EnvConfig) -> Result<String> {
         } => export_sender(&env_path, &env, &list, &address, &path),
         Commands::Import { source } => import_archive(&env_path, &source),
         Commands::Logs { action } => logs(&root, log_level, action, cli.json),
+        Commands::Configure => configure(&env_path, &env, &logger),
     }
 }
 
@@ -189,6 +191,163 @@ fn update(env_path: &Path, env: &EnvConfig, logger: &Logger) -> Result<String> {
         Some(&format!("root={}", root.display())),
     )?;
     Ok(format!("updated {}", root.display()))
+}
+
+fn configure(env_path: &Path, env: &EnvConfig, logger: &Logger) -> Result<String> {
+    let mut input = io::stdin().lock();
+    let mut output = io::stdout();
+    writeln!(output, "Welcome to Owl configuration")?;
+    let default_root = mail_root(env_path);
+    let mail_root = prompt(
+        &mut input,
+        &mut output,
+        "Mail root directory",
+        Some(default_root.to_string_lossy().as_ref()),
+    )?;
+    let mail_root = PathBuf::from(mail_root);
+    fs::create_dir_all(&mail_root)?;
+
+    let default_env = if env_path.as_os_str().is_empty() {
+        mail_root.join(".env")
+    } else {
+        env_path.to_path_buf()
+    };
+    let env_path = prompt(
+        &mut input,
+        &mut output,
+        "Env file path",
+        Some(default_env.to_string_lossy().as_ref()),
+    )?;
+    let env_path = PathBuf::from(env_path);
+    if !env_path.exists() {
+        if prompt_yes_no(&mut input, &mut output, "Create env file now?", true)? {
+            setup_env(&mut input, &mut output, &env_path, env)?;
+        }
+    }
+
+    loop {
+        writeln!(output)?;
+        writeln!(output, "Owl configuration wizard")?;
+        writeln!(output, "1) Initialize mail root (owl install)")?;
+        writeln!(output, "2) Configure env settings")?;
+        writeln!(output, "3) Add accepted routing rule")?;
+        writeln!(output, "4) Add spam routing rule")?;
+        writeln!(output, "5) Add banned routing rule")?;
+        writeln!(output, "6) Configure list settings")?;
+        writeln!(output, "7) Show current env + rules summary")?;
+        writeln!(output, "8) Quit")?;
+        let choice = prompt(&mut input, &mut output, "Choose an option [1-8]", None)?;
+        match choice.trim() {
+            "1" => {
+                let active_env = load_env(&env_path).unwrap_or_else(|_| env.clone());
+                install(&env_path, &active_env, logger)?;
+            }
+            "2" => {
+                let active_env = load_env(&env_path).unwrap_or_else(|_| env.clone());
+                setup_env(&mut input, &mut output, &env_path, &active_env)?;
+            }
+            "3" => {
+                let entry = prompt(
+                    &mut input,
+                    &mut output,
+                    "Accepted rule (address/domain/regex)",
+                    None,
+                )?;
+                if !entry.trim().is_empty() {
+                    set_rules_entry(&mail_root.join("accepted/.rules"), &entry)?;
+                }
+            }
+            "4" => {
+                let entry = prompt(
+                    &mut input,
+                    &mut output,
+                    "Spam rule (address/domain/regex)",
+                    None,
+                )?;
+                if !entry.trim().is_empty() {
+                    set_rules_entry(&mail_root.join("spam/.rules"), &entry)?;
+                }
+            }
+            "5" => {
+                let entry = prompt(
+                    &mut input,
+                    &mut output,
+                    "Banned rule (address/domain/regex)",
+                    None,
+                )?;
+                if !entry.trim().is_empty() {
+                    set_rules_entry(&mail_root.join("banned/.rules"), &entry)?;
+                }
+            }
+            "6" => {
+                let list = prompt(
+                    &mut input,
+                    &mut output,
+                    "List to configure (accepted/spam/banned)",
+                    Some("accepted"),
+                )?;
+                if !matches!(list.as_str(), "accepted" | "spam" | "banned") {
+                    writeln!(output, "Unknown list: {list}")?;
+                    continue;
+                }
+                let from_value = prompt(
+                    &mut input,
+                    &mut output,
+                    "From header",
+                    Some("Owl <owl@example.org>"),
+                )?;
+                let reply_to = prompt(&mut input, &mut output, "Reply-To header", Some(""))?;
+                let signature = prompt(
+                    &mut input,
+                    &mut output,
+                    "Signature path (optional)",
+                    Some(""),
+                )?;
+                let body_format = prompt(
+                    &mut input,
+                    &mut output,
+                    "Body format (both/plain/html)",
+                    Some("both"),
+                )?;
+                let delete_after = prompt(
+                    &mut input,
+                    &mut output,
+                    "Delete after (never/30d/6m/2y)",
+                    Some("never"),
+                )?;
+                let list_status = prompt(
+                    &mut input,
+                    &mut output,
+                    "List status (accepted/rejected/banned)",
+                    Some("accepted"),
+                )?;
+                set_settings_file(
+                    &mail_root.join(format!("{list}/.settings")),
+                    &from_value,
+                    &reply_to,
+                    &signature,
+                    &body_format,
+                    &delete_after,
+                    &list_status,
+                )?;
+            }
+            "7" => {
+                show_summary(&mut output, &env_path, &mail_root)?;
+            }
+            "8" => {
+                writeln!(output, "Exiting configuration wizard.")?;
+                break;
+            }
+            _ => {
+                writeln!(output, "Invalid selection.")?;
+            }
+        }
+    }
+
+    Ok(format!(
+        "configuration complete for {}",
+        mail_root.display()
+    ))
 }
 
 fn restart(env_path: &Path, target: RestartTarget, logger: &Logger) -> Result<String> {
@@ -942,6 +1101,234 @@ fn load_env(path: &Path) -> Result<EnvConfig> {
     } else {
         Ok(EnvConfig::default())
     }
+}
+
+fn prompt(
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+    label: &str,
+    default: Option<&str>,
+) -> Result<String> {
+    match default {
+        Some(value) if !value.is_empty() => {
+            write!(output, "{label} [{value}]: ")?;
+        }
+        _ => {
+            write!(output, "{label}: ")?;
+        }
+    }
+    output.flush()?;
+    let mut line = String::new();
+    input.read_line(&mut line)?;
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        Ok(default.unwrap_or_default().to_string())
+    } else {
+        Ok(trimmed.to_string())
+    }
+}
+
+fn prompt_yes_no(
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+    label: &str,
+    default_yes: bool,
+) -> Result<bool> {
+    loop {
+        if default_yes {
+            write!(output, "{label} [Y/n]: ")?;
+        } else {
+            write!(output, "{label} [y/N]: ")?;
+        }
+        output.flush()?;
+        let mut line = String::new();
+        input.read_line(&mut line)?;
+        let trimmed = line.trim();
+        let answer = if trimmed.is_empty() {
+            if default_yes { "y" } else { "n" }
+        } else {
+            trimmed
+        };
+        match answer {
+            "y" | "Y" => return Ok(true),
+            "n" | "N" => return Ok(false),
+            _ => {
+                writeln!(output, "Please answer y or n.")?;
+            }
+        }
+    }
+}
+
+fn setup_env(
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+    env_path: &Path,
+    defaults: &EnvConfig,
+) -> Result<()> {
+    writeln!(output, "Configuring env file at {}", env_path.display())?;
+    let keep_plus = prompt(
+        input,
+        output,
+        "Keep plus-tags in addresses? (true/false)",
+        Some(bool_to_env(defaults.keep_plus_tags)),
+    )?;
+    let render_mode = prompt(
+        input,
+        output,
+        "Render mode (strict/moderate)",
+        Some(&defaults.render_mode),
+    )?;
+    let logging = prompt(
+        input,
+        output,
+        "Logging level (off/minimal/verbose_sanitized/verbose_full)",
+        Some(&defaults.logging),
+    )?;
+    let max_quarantine = prompt(
+        input,
+        output,
+        "Max size for quarantine (e.g. 25M)",
+        Some(&defaults.max_size_quarantine),
+    )?;
+    let max_approved = prompt(
+        input,
+        output,
+        "Max size for approved mail (e.g. 50M)",
+        Some(&defaults.max_size_approved_default),
+    )?;
+    let dkim_selector = prompt(
+        input,
+        output,
+        "DKIM selector",
+        Some(&defaults.dkim_selector),
+    )?;
+    let dmarc_policy = prompt(input, output, "DMARC policy", Some(&defaults.dmarc_policy))?;
+    let retry_backoff = prompt(
+        input,
+        output,
+        "Retry backoff schedule",
+        Some(&defaults.retry_backoff.join(",")),
+    )?;
+
+    upsert_env_setting(env_path, "keep_plus_tags", &keep_plus)?;
+    upsert_env_setting(env_path, "render_mode", &render_mode)?;
+    upsert_env_setting(env_path, "logging", &logging)?;
+    upsert_env_setting(env_path, "max_size_quarantine", &max_quarantine)?;
+    upsert_env_setting(env_path, "max_size_approved_default", &max_approved)?;
+    upsert_env_setting(env_path, "dkim_selector", &dkim_selector)?;
+    upsert_env_setting(env_path, "dmarc_policy", &dmarc_policy)?;
+    upsert_env_setting(env_path, "retry_backoff", &retry_backoff)?;
+    Ok(())
+}
+
+fn upsert_env_setting(env_path: &Path, key: &str, value: &str) -> Result<()> {
+    let mut lines = Vec::new();
+    let mut found = false;
+    if env_path.exists() {
+        let data = fs::read_to_string(env_path)
+            .with_context(|| format!("reading {}", env_path.display()))?;
+        for line in data.lines() {
+            if line.trim_start().starts_with('#') || line.trim().is_empty() {
+                lines.push(line.to_string());
+                continue;
+            }
+            if let Some((k, _)) = line.split_once('=') {
+                if k.trim() == key {
+                    lines.push(format!("{key}={value}"));
+                    found = true;
+                    continue;
+                }
+            }
+            lines.push(line.to_string());
+        }
+    }
+    if !found {
+        lines.push(format!("{key}={value}"));
+    }
+    let rendered = if lines.is_empty() {
+        format!("{key}={value}\n")
+    } else {
+        format!("{}\n", lines.join("\n"))
+    };
+    write_atomic(env_path, rendered.as_bytes())
+        .with_context(|| format!("writing {}", env_path.display()))?;
+    Ok(())
+}
+
+fn set_rules_entry(path: &Path, entry: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if path.exists() {
+        let data = fs::read_to_string(path)?;
+        if data.lines().any(|line| line.trim() == entry.trim()) {
+            return Ok(());
+        }
+        let mut rendered = data;
+        if !rendered.ends_with('\n') {
+            rendered.push('\n');
+        }
+        rendered.push_str(entry.trim());
+        rendered.push('\n');
+        write_atomic(path, rendered.as_bytes())?;
+    } else {
+        write_atomic(path, format!("{}\n", entry.trim()).as_bytes())?;
+    }
+    Ok(())
+}
+
+fn set_settings_file(
+    path: &Path,
+    from_value: &str,
+    reply_to: &str,
+    signature: &str,
+    body_format: &str,
+    delete_after: &str,
+    list_status: &str,
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let settings = format!(
+        "list_status={list_status}\n\
+delete_after={delete_after}\n\
+from={from_value}\n\
+reply_to={reply_to}\n\
+signature={signature}\n\
+body_format={body_format}\n\
+collapse_signatures=true\n"
+    );
+    write_atomic(path, settings.as_bytes())?;
+    Ok(())
+}
+
+fn show_summary(output: &mut impl Write, env_path: &Path, root: &Path) -> Result<()> {
+    writeln!(output, "Env file: {}", env_path.display())?;
+    if env_path.exists() {
+        let data = fs::read_to_string(env_path)?;
+        for line in data.lines() {
+            writeln!(output, "  {line}")?;
+        }
+    } else {
+        writeln!(output, "  (missing)")?;
+    }
+    for list in ["accepted", "spam", "banned"] {
+        let rules_path = root.join(list).join(".rules");
+        writeln!(output, "Rules for {list}: {}", rules_path.display())?;
+        if rules_path.exists() {
+            let data = fs::read_to_string(&rules_path)?;
+            for line in data.lines() {
+                writeln!(output, "  {line}")?;
+            }
+        } else {
+            writeln!(output, "  (missing)")?;
+        }
+    }
+    Ok(())
+}
+
+fn bool_to_env(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
 }
 
 #[cfg(test)]
