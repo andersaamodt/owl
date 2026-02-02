@@ -90,4 +90,90 @@ mod tests {
             prop_assert_eq!(addr, roundtrip);
         }
     }
+
+    #[test]
+    fn multiple_plus_signs_strips_all() {
+        // Per spec: +tag stripped unless keep_plus_tags=true
+        // Multiple plus signs: only keep first part before first +
+        let addr = Address::parse("user+tag1+tag2@example.org", false).unwrap();
+        assert_eq!(addr.local(), "user");
+        assert_eq!(addr.canonical(), "user@example.org");
+    }
+
+    #[test]
+    fn multiple_plus_signs_kept_when_configured() {
+        let addr = Address::parse("user+tag1+tag2@example.org", true).unwrap();
+        assert_eq!(addr.local(), "user+tag1+tag2");
+        assert_eq!(addr.canonical(), "user+tag1+tag2@example.org");
+    }
+
+    #[test]
+    fn mixed_case_normalized_with_plus_stripping() {
+        // Case should normalize even with plus tag stripping
+        let addr = Address::parse("AlIcE+Tag@ExAmple.Org", false).unwrap();
+        assert_eq!(addr.local(), "alice");
+        assert_eq!(addr.domain(), "example.org");
+        assert_eq!(addr.canonical(), "alice@example.org");
+    }
+
+    #[test]
+    fn plus_tag_with_special_chars_kept() {
+        // When keep_plus_tags=true, preserve the tag content
+        let addr = Address::parse("user+tag-123_abc@example.org", true).unwrap();
+        assert_eq!(addr.local(), "user+tag-123_abc");
+    }
+
+    #[test]
+    fn empty_plus_tag_handled() {
+        // user+ (empty tag) should keep "user"
+        let addr = Address::parse("user+@example.org", false).unwrap();
+        assert_eq!(addr.local(), "user");
+
+        let addr_keep = Address::parse("user+@example.org", true).unwrap();
+        assert_eq!(addr_keep.local(), "user+");
+    }
+
+    #[test]
+    fn whitespace_trimmed_from_address() {
+        // Per spec: address should be trimmed
+        let addr = Address::parse("  user@example.org  ", false).unwrap();
+        assert_eq!(addr.canonical(), "user@example.org");
+    }
+
+    #[test]
+    fn whitespace_in_local_and_domain_parts_trimmed() {
+        let addr = Address::parse(" user @  example.org ", false).unwrap();
+        assert_eq!(addr.local(), "user");
+        assert_eq!(addr.domain(), "example.org");
+    }
+
+    #[test]
+    fn unicode_in_domain_punycoded() {
+        // Per spec: domain should be punycoded
+        let addr = Address::parse("user@café.example.org", false).unwrap();
+        assert!(addr.domain().starts_with("xn--"));
+        assert!(addr.canonical().contains("xn--"));
+    }
+
+    #[test]
+    fn subdomain_with_unicode_punycoded() {
+        let addr = Address::parse("user@mail.café.org", false).unwrap();
+        assert!(addr.domain().contains("xn--"));
+    }
+
+    #[test]
+    fn sender_folder_format() {
+        // Per spec: sender folder is local@domain (lowercased, punycoded)
+        let addr = Address::parse("Alice+promo@Example.Org", false).unwrap();
+        // Should strip +promo and lowercase
+        let folder = format!("{}/", addr.canonical());
+        assert_eq!(folder, "alice@example.org/");
+    }
+
+    #[test]
+    fn sender_folder_with_keep_plus_tags() {
+        let addr = Address::parse("Alice+promo@Example.Org", true).unwrap();
+        let folder = format!("{}/", addr.canonical());
+        assert_eq!(folder, "alice+promo@example.org/");
+    }
 }

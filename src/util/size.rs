@@ -92,4 +92,97 @@ mod tests {
         let err = parse_size(&too_big).unwrap_err();
         assert!(err.to_string().contains("invalid size value"));
     }
+
+    #[test]
+    fn parse_spec_quarantine_limit() {
+        // Per spec: quarantine cap is 25M
+        assert_eq!(parse_size("25M").unwrap(), 25 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_spec_approved_limit() {
+        // Per spec: approved default cap is 50M
+        assert_eq!(parse_size("50M").unwrap(), 50 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_size_whitespace_handling() {
+        // Whitespace should be trimmed
+        assert_eq!(parse_size("  25M  ").unwrap(), 25 * 1024 * 1024);
+        assert_eq!(parse_size(" 1G ").unwrap(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_size_case_insensitive() {
+        // Suffixes are case-insensitive
+        assert_eq!(parse_size("1m").unwrap(), 1024 * 1024);
+        assert_eq!(parse_size("1M").unwrap(), 1024 * 1024);
+        assert_eq!(parse_size("1MB").unwrap(), 1024 * 1024);
+        assert_eq!(parse_size("1mb").unwrap(), 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_size_kibibyte_suffix() {
+        // KiB, MiB, GiB explicit binary suffixes
+        assert_eq!(parse_size("1KiB").unwrap(), 1024);
+        assert_eq!(parse_size("1MiB").unwrap(), 1024 * 1024);
+        assert_eq!(parse_size("1GiB").unwrap(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_size_zero_value() {
+        assert_eq!(parse_size("0").unwrap(), 0);
+        assert_eq!(parse_size("0M").unwrap(), 0);
+        assert_eq!(parse_size("0G").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_size_rejects_unsupported_suffixes() {
+        // TB, PB not supported
+        assert!(parse_size("1TB").is_err());
+        assert!(parse_size("1PB").is_err());
+        assert!(parse_size("1t").is_err());
+
+        // Invalid suffixes
+        assert!(parse_size("1X").is_err());
+        assert!(parse_size("10bytes").is_err());
+    }
+
+    #[test]
+    fn parse_size_empty_string_error() {
+        assert!(parse_size("").is_err());
+        assert!(parse_size("   ").is_err());
+    }
+
+    #[test]
+    fn parse_size_no_digits_error() {
+        assert!(parse_size("MB").is_err());
+        assert!(parse_size("K").is_err());
+    }
+
+    #[test]
+    fn parse_size_boundary_at_limit() {
+        // Test exactly at message size boundary
+        let exactly_25mb = parse_size("25M").unwrap();
+        assert_eq!(exactly_25mb, 25 * 1024 * 1024);
+
+        // One byte over should still parse
+        let bytes_str = (25 * 1024 * 1024 + 1).to_string();
+        assert_eq!(parse_size(&bytes_str).unwrap(), 25 * 1024 * 1024 + 1);
+    }
+
+    #[test]
+    fn parse_size_b_suffix_explicit() {
+        // Explicit 'B' suffix for bytes
+        assert_eq!(parse_size("512B").unwrap(), 512);
+        assert_eq!(parse_size("100b").unwrap(), 100);
+    }
+
+    #[test]
+    fn parse_size_overflow_detection() {
+        // Ensure overflow is properly detected with checked_mul
+        let near_max = u64::MAX / 1024 + 1;
+        let input = format!("{}K", near_max);
+        assert!(parse_size(&input).is_err());
+    }
 }

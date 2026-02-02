@@ -102,4 +102,94 @@ mod tests {
     fn parse_interval_rejects_empty_values() {
         assert!(parse_interval("   ").is_none());
     }
+
+    #[test]
+    fn parse_delete_after_boundary_zero_values() {
+        // Per spec: 0d, 0m, 0y should parse (not reject) but not force immediate deletion
+        assert_eq!(parse_delete_after("0d").unwrap().whole_days(), 0);
+        assert_eq!(parse_delete_after("0m").unwrap().whole_days(), 0);
+        assert_eq!(parse_delete_after("0y").unwrap().whole_days(), 0);
+    }
+
+    #[test]
+    fn parse_delete_after_large_values() {
+        // Test overflow safety with large values
+        assert_eq!(parse_delete_after("100y").unwrap().whole_days(), 100 * 365);
+        assert_eq!(parse_delete_after("1000d").unwrap().whole_days(), 1000);
+        assert_eq!(parse_delete_after("500m").unwrap().whole_days(), 500 * 30);
+    }
+
+    #[test]
+    fn parse_delete_after_whitespace_handling() {
+        // Whitespace should be trimmed per spec
+        assert_eq!(parse_delete_after(" 30d ").unwrap().whole_days(), 30);
+        assert_eq!(parse_delete_after("  6m  ").unwrap().whole_days(), 6 * 30);
+        assert!(parse_delete_after(" never ").is_none());
+    }
+
+    #[test]
+    fn parse_delete_after_empty_after_trim() {
+        // Empty string after trim should return None
+        assert!(parse_delete_after("   ").is_none());
+        assert!(parse_delete_after("").is_none());
+    }
+
+    #[test]
+    fn parse_delete_after_invalid_suffixes() {
+        // Per spec: only d, m, y, never are valid
+        assert!(parse_delete_after("1w").is_none()); // weeks not supported
+        assert!(parse_delete_after("1h").is_none()); // hours not supported
+        assert!(parse_delete_after("30s").is_none()); // seconds not supported
+        assert!(parse_delete_after("2q").is_none()); // quarters not supported
+    }
+
+    #[test]
+    fn parse_delete_after_negative_values() {
+        // Negative values should parse but are semantically invalid
+        // The parser accepts them (parse::<i64> succeeds)
+        assert!(parse_delete_after("-1d").is_some());
+        assert!(parse_delete_after("-10y").is_some());
+    }
+
+    #[test]
+    fn parse_delete_after_non_numeric_prefix() {
+        // "abcd" should fail to parse as number
+        assert!(parse_delete_after("abcd").is_none());
+        assert!(parse_delete_after("xd").is_none());
+    }
+
+    #[test]
+    fn retention_due_exact_boundary() {
+        // Test exact time boundary
+        let now = OffsetDateTime::now_utc();
+        let exactly_30_days_ago = now - Duration::days(30);
+
+        // Exactly at boundary: last_activity + 30d == now, so NOT due yet
+        assert!(!retention_due(exactly_30_days_ago, "30d", now));
+
+        // Just over boundary: last_activity + 30d < now, so IS due
+        let just_over_30_days = now - Duration::days(30) - Duration::seconds(1);
+        assert!(retention_due(just_over_30_days, "30d", now));
+    }
+
+    #[test]
+    fn parse_interval_case_insensitive() {
+        // parse_interval uses to_ascii_lowercase
+        assert_eq!(parse_interval("10S").unwrap().whole_seconds(), 10);
+        assert_eq!(parse_interval("5M").unwrap().whole_minutes(), 5);
+        assert_eq!(parse_interval("2H").unwrap().whole_hours(), 2);
+        assert_eq!(parse_interval("3D").unwrap().whole_days(), 3);
+    }
+
+    #[test]
+    fn parse_interval_zero_value() {
+        assert_eq!(parse_interval("0s").unwrap().whole_seconds(), 0);
+        assert_eq!(parse_interval("0m").unwrap().whole_minutes(), 0);
+    }
+
+    #[test]
+    fn parse_interval_whitespace_trimmed() {
+        assert_eq!(parse_interval("  10s  ").unwrap().whole_seconds(), 10);
+        assert_eq!(parse_interval(" 5m ").unwrap().whole_minutes(), 5);
+    }
 }

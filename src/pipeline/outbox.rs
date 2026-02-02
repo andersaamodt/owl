@@ -556,6 +556,73 @@ mod tests {
     }
 
     #[test]
+    fn next_delay_backoff_progression() {
+        // Per spec: retry_backoff=1m,5m,15m,1h
+        let schedule = vec![
+            Duration::minutes(1),
+            Duration::minutes(5),
+            Duration::minutes(15),
+            Duration::hours(1),
+        ];
+
+        // First attempt (0) -> no delay
+        // Second attempt (1) -> first delay (1m)
+        assert_eq!(next_delay(1, &schedule), Duration::minutes(1));
+        assert_eq!(next_delay(2, &schedule), Duration::minutes(5));
+        assert_eq!(next_delay(3, &schedule), Duration::minutes(15));
+        assert_eq!(next_delay(4, &schedule), Duration::hours(1));
+
+        // Beyond schedule length: use last value
+        assert_eq!(next_delay(5, &schedule), Duration::hours(1));
+        assert_eq!(next_delay(100, &schedule), Duration::hours(1));
+    }
+
+    #[test]
+    fn next_delay_first_attempt_uses_first_delay() {
+        let schedule = vec![Duration::seconds(30), Duration::minutes(2)];
+        // Attempt 1 uses schedule[0]
+        assert_eq!(next_delay(1, &schedule), Duration::seconds(30));
+    }
+
+    #[test]
+    fn parse_retry_schedule_spec_default() {
+        // Default config should give us the spec default schedule
+        let env = EnvConfig::default();
+        let schedule = parse_retry_schedule(&env);
+        assert_eq!(schedule.len(), 4);
+        assert_eq!(schedule[0], Duration::minutes(1));
+        assert_eq!(schedule[1], Duration::minutes(5));
+        assert_eq!(schedule[2], Duration::minutes(15));
+        assert_eq!(schedule[3], Duration::hours(1));
+    }
+
+    #[test]
+    fn parse_retry_schedule_custom_values() {
+        let env = EnvConfig {
+            retry_backoff: vec!["30s".into(), "2m".into(), "10m".into()],
+            ..EnvConfig::default()
+        };
+        let schedule = parse_retry_schedule(&env);
+        assert_eq!(schedule.len(), 3);
+        assert_eq!(schedule[0], Duration::seconds(30));
+        assert_eq!(schedule[1], Duration::minutes(2));
+        assert_eq!(schedule[2], Duration::minutes(10));
+    }
+
+    #[test]
+    fn parse_retry_schedule_filters_invalid_and_keeps_valid() {
+        let env = EnvConfig {
+            retry_backoff: vec!["1m".into(), "invalid".into(), "5m".into(), "bad".into()],
+            ..EnvConfig::default()
+        };
+        let schedule = parse_retry_schedule(&env);
+        // Should only have the 2 valid entries
+        assert_eq!(schedule.len(), 2);
+        assert_eq!(schedule[0], Duration::minutes(1));
+        assert_eq!(schedule[1], Duration::minutes(5));
+    }
+
+    #[test]
     fn split_headers_body_reports_missing_marker() {
         let err = split_headers_body(b"Subject: hi").unwrap_err();
         assert!(err.to_string().contains("separator"));
