@@ -91,6 +91,7 @@ impl FromStr for RuleSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn parse_suffix() {
@@ -332,5 +333,96 @@ mod tests {
         assert!(Rule::parse("not-an-email-or-pattern").is_err());
         assert!(Rule::parse("").is_err());
         assert!(Rule::parse("   ").is_err()); // whitespace only
+    }
+
+    proptest! {
+        #[test]
+        fn domain_suffix_always_matches_subdomain(
+            subdomain in "[a-z]{1,10}",
+            domain in "[a-z]{2,10}\\.test"
+        ) {
+            let full_domain = format!("{}.{}", subdomain, domain);
+            let rule = Rule::parse(&format!("@{}", domain)).unwrap();
+            let addr = Address::parse(&format!("user@{}", full_domain), false).unwrap();
+            prop_assert!(rule.matches(&addr));
+        }
+
+        #[test]
+        fn domain_exact_never_matches_subdomain(
+            subdomain in "[a-z]{1,10}",
+            domain in "[a-z]{2,10}\\.test"
+        ) {
+            let full_domain = format!("{}.{}", subdomain, domain);
+            let rule = Rule::parse(&format!("@={}", domain)).unwrap();
+            let addr = Address::parse(&format!("user@{}", full_domain), false).unwrap();
+            prop_assert!(!rule.matches(&addr));
+        }
+
+        #[test]
+        fn exact_address_match_deterministic(
+            local in "[a-z]{1,10}",
+            domain in "[a-z]{2,10}\\.org"
+        ) {
+            let email = format!("{}@{}", local, domain);
+            let rule = Rule::parse(&email).unwrap();
+            let addr = Address::parse(&email, false).unwrap();
+            prop_assert!(rule.matches(&addr));
+        }
+    }
+
+    #[test]
+    fn rule_equality() {
+        let rule1 = Rule::parse("@example.org").unwrap();
+        let rule2 = Rule::parse("@example.org").unwrap();
+        assert_eq!(rule1, rule2);
+    }
+
+    #[test]
+    fn rule_inequality() {
+        let rule1 = Rule::parse("@example.org").unwrap();
+        let rule2 = Rule::parse("@test.org").unwrap();
+        assert_ne!(rule1, rule2);
+    }
+
+    #[test]
+    fn rule_clone_equals_original() {
+        let rule = Rule::parse("@example.org").unwrap();
+        let cloned = rule.clone();
+        assert_eq!(rule, cloned);
+    }
+
+    #[test]
+    fn regex_with_empty_pattern() {
+        // Empty regex pattern
+        let rule = Rule::parse("//").unwrap();
+        // Empty regex matches everything
+        let addr = Address::parse("any@example.org", false).unwrap();
+        assert!(rule.matches(&addr));
+    }
+
+    #[test]
+    fn regex_with_dot_metachar() {
+        // Dot in regex matches any character
+        let rule = Rule::parse(r"/a.b@example\.org/").unwrap();
+        let match1 = Address::parse("aXb@example.org", false).unwrap();
+        let match2 = Address::parse("a@b@example.org", false).unwrap();
+
+        assert!(rule.matches(&match1));
+        // Second @ would fail IDNA, so this won't parse correctly
+        assert!(match2.domain().contains("@") || !rule.matches(&match2));
+    }
+
+    #[test]
+    fn ruleset_with_only_comments() {
+        let data = "# comment 1\n# comment 2\n# comment 3";
+        let set = RuleSet::parse(data).unwrap();
+        assert!(set.rules().is_empty());
+    }
+
+    #[test]
+    fn ruleset_debug_display() {
+        let set = RuleSet::parse("@example.org").unwrap();
+        let debug = format!("{:?}", set);
+        assert!(debug.contains("RuleSet"));
     }
 }
