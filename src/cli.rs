@@ -141,7 +141,7 @@ pub enum LogAction {
     Tail,
 }
 
-const DEFAULT_ENV_PATH: &str = "/home/pi/mail/.env";
+const DEFAULT_ENV_PATH_TEMPLATE: &str = "~/mail/.env";
 
 pub fn run(cli: OwlCli, env: EnvConfig) -> Result<String> {
     let env_path = resolve_env_path(&cli.env)?;
@@ -1102,7 +1102,8 @@ where
     F: Fn() -> Result<PathBuf>,
 {
     if raw.is_empty() {
-        return Ok(PathBuf::from(DEFAULT_ENV_PATH));
+        // Use default template with home directory expansion
+        return resolve_env_path_with_home(DEFAULT_ENV_PATH_TEMPLATE, home);
     }
     if raw == "~" {
         return home();
@@ -2528,12 +2529,14 @@ mod tests {
 
     #[test]
     fn resolve_env_path_expands_defaults() {
-        let default = resolve_env_path("").unwrap();
-        assert_eq!(default, PathBuf::from(DEFAULT_ENV_PATH));
         let closure = || Ok(PathBuf::from("/home/example"));
-        let tilde = resolve_env_path_with_home("~/mail/.env", closure).unwrap();
+        let default = resolve_env_path_with_home("", closure).unwrap();
+        assert_eq!(default, PathBuf::from("/home/example/mail/.env"));
+        let tilde =
+            resolve_env_path_with_home("~/mail/.env", || Ok(PathBuf::from("/home/example")))
+                .unwrap();
         assert_eq!(tilde, PathBuf::from("/home/example/mail/.env"));
-        let bare = resolve_env_path_with_home("~", closure).unwrap();
+        let bare = resolve_env_path_with_home("~", || Ok(PathBuf::from("/home/example"))).unwrap();
         assert_eq!(bare, PathBuf::from("/home/example"));
     }
 
