@@ -179,4 +179,135 @@ mod tests {
         let spam_settings = fs::read_to_string(dir.path().join("spam/.settings")).unwrap();
         assert!(spam_settings.contains("list_status=rejected"));
     }
+
+    #[test]
+    fn spec_on_disk_layout_structure() {
+        // Per spec: verify exact directory structure
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+
+        // Per spec section 1: all required directories exist
+        let root = dir.path();
+        assert!(root.join("quarantine").is_dir());
+        assert!(root.join("accepted").is_dir());
+        assert!(root.join("spam").is_dir());
+        assert!(root.join("banned").is_dir());
+        assert!(root.join("drafts").is_dir());
+        assert!(root.join("outbox").is_dir());
+        assert!(root.join("sent").is_dir());
+        assert!(root.join("logs").is_dir());
+    }
+
+    #[test]
+    fn spec_quarantine_has_no_rules_or_settings() {
+        // Per spec: quarantine has no .rules or .settings
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+
+        let quarantine = dir.path().join("quarantine");
+        assert!(!quarantine.join(".rules").exists());
+        assert!(!quarantine.join(".settings").exists());
+    }
+
+    #[test]
+    fn spec_lists_have_rules_and_settings() {
+        // Per spec: accepted, spam, banned have .rules and .settings
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+
+        for list in ["accepted", "spam", "banned"] {
+            let list_dir = dir.path().join(list);
+            assert!(list_dir.join(".rules").exists(), "{list} missing .rules");
+            assert!(
+                list_dir.join(".settings").exists(),
+                "{list} missing .settings"
+            );
+        }
+    }
+
+    #[test]
+    fn spec_lists_have_attachments_subdirectory() {
+        // Per spec: accepted, spam, banned have attachments/ subdirectory
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+
+        for list in ["accepted", "spam", "banned"] {
+            let attachments = dir.path().join(list).join("attachments");
+            assert!(attachments.is_dir(), "{list} missing attachments/");
+        }
+    }
+
+    #[test]
+    fn spec_default_settings_per_list() {
+        // Per spec: different defaults per list
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+
+        let accepted = fs::read_to_string(dir.path().join("accepted/.settings")).unwrap();
+        assert!(accepted.contains("list_status=accepted"));
+
+        let spam = fs::read_to_string(dir.path().join("spam/.settings")).unwrap();
+        assert!(spam.contains("list_status=rejected"));
+
+        let banned = fs::read_to_string(dir.path().join("banned/.settings")).unwrap();
+        assert!(banned.contains("list_status=banned"));
+    }
+
+    #[test]
+    fn spec_dkim_directory_structure() {
+        // Per spec: DKIM keys stored in dkim/ directory
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+        layout.ensure().unwrap();
+
+        assert!(dir.path().join("dkim").is_dir());
+
+        // Check path generation for selector "mail"
+        assert_eq!(
+            layout.dkim_private_key("mail"),
+            dir.path().join("dkim/mail.private")
+        );
+        assert_eq!(
+            layout.dkim_public_key("mail"),
+            dir.path().join("dkim/mail.public")
+        );
+        assert_eq!(
+            layout.dkim_dns_record("mail"),
+            dir.path().join("dkim/mail.dns")
+        );
+    }
+
+    #[test]
+    fn ensure_idempotent() {
+        // Running ensure() multiple times should be safe
+        let dir = tempfile::tempdir().unwrap();
+        let layout = MailLayout::new(dir.path());
+
+        layout.ensure().unwrap();
+        layout.ensure().unwrap();
+        layout.ensure().unwrap();
+
+        // All directories should still exist
+        assert!(dir.path().join("quarantine").is_dir());
+        assert!(dir.path().join("accepted").is_dir());
+    }
+
+    #[test]
+    fn default_settings_include_all_fields() {
+        // Default settings should include all required fields
+        let settings = String::from_utf8(default_settings("accepted")).unwrap();
+
+        assert!(settings.contains("list_status="));
+        assert!(settings.contains("delete_after="));
+        assert!(settings.contains("from="));
+        assert!(settings.contains("reply_to="));
+        assert!(settings.contains("signature="));
+        assert!(settings.contains("body_format="));
+        assert!(settings.contains("collapse_signatures="));
+    }
 }
