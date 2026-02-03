@@ -51,7 +51,7 @@ install_systemd() {
   service_file="/tmp/owld.service.$$"
   
   if [ "$(id -u)" -eq 0 ]; then
-    # System-wide installation
+    # System-wide installation - keep User directive
     sed -e "s|%INSTALL_DIR%|$install_dir|g" \
         -e "s|%MAIL_ROOT%|$mail_root|g" \
         -e "s|%USER%|$user|g" \
@@ -62,10 +62,10 @@ install_systemd() {
     log "Installed owld.service to /etc/systemd/system/"
     log "Start with: systemctl start owld"
   else
-    # User-level installation - use default.target instead of multi-user.target
+    # User-level installation - remove User directive and change target
     sed -e "s|%INSTALL_DIR%|$install_dir|g" \
         -e "s|%MAIL_ROOT%|$mail_root|g" \
-        -e "s|%USER%|$user|g" \
+        -e "/^User=/d" \
         -e "s|WantedBy=multi-user.target|WantedBy=default.target|g" \
         "$(dirname "$0")/owld.service" > "$service_file"
     user_unit_dir="$HOME/.config/systemd/user"
@@ -92,10 +92,20 @@ install_launchd() {
   user_agent_dir="$HOME/Library/LaunchAgents"
   mkdir -p "$user_agent_dir"
   install -m 0644 "$plist_file" "$user_agent_dir/com.owl.daemon.plist"
-  launchctl load "$user_agent_dir/com.owl.daemon.plist"
   
-  log "Installed com.owl.daemon.plist to $user_agent_dir/"
-  log "Start with: launchctl start com.owl.daemon"
+  # Use bootstrap for macOS 10.11+ if available, fall back to load
+  # bootstrap is the recommended modern approach
+  if launchctl bootstrap gui/"$(id -u)" "$user_agent_dir/com.owl.daemon.plist" 2>/dev/null; then
+    log "Installed com.owl.daemon.plist to $user_agent_dir/"
+    log "Service will start at login"
+  elif launchctl load "$user_agent_dir/com.owl.daemon.plist" 2>/dev/null; then
+    log "Installed com.owl.daemon.plist to $user_agent_dir/"
+    log "Start with: launchctl start com.owl.daemon"
+  else
+    log "Installed com.owl.daemon.plist to $user_agent_dir/"
+    log "Note: Could not auto-start service. Start manually with:"
+    log "  launchctl load $user_agent_dir/com.owl.daemon.plist"
+  fi
   
   rm -f "$plist_file"
 }

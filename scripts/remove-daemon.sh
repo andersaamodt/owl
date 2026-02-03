@@ -55,7 +55,9 @@ remove_launchd() {
   plist_path="$user_agent_dir/com.owl.daemon.plist"
   
   if [ -f "$plist_path" ]; then
-    launchctl unload "$plist_path" 2>/dev/null || true
+    # Try bootout first (modern macOS), fall back to unload
+    launchctl bootout gui/"$(id -u)/com.owl.daemon" 2>/dev/null || \
+      launchctl unload "$plist_path" 2>/dev/null || true
     rm -f "$plist_path"
     log "Removed com.owl.daemon.plist from $user_agent_dir/"
   else
