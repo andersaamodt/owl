@@ -53,7 +53,8 @@ mod tests {
                 use std::os::unix::fs::PermissionsExt;
                 let mut perms = std::fs::metadata(&path).unwrap().permissions();
                 perms.set_mode(0o755);
-                std::fs::set_permissions(&path, perms).unwrap();
+                // Ignore permission errors on systems that don't support it
+                let _ = std::fs::set_permissions(&path, perms);
             }
         }
         let original = std::env::var_os("PATH");

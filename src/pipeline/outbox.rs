@@ -18,7 +18,10 @@ use time::{
 
 use crate::{
     envcfg::EnvConfig,
-    fsops::{io_atom::write_atomic, layout::MailLayout},
+    fsops::{
+        io_atom::{create_dir_all, write_atomic},
+        layout::MailLayout,
+    },
     model::{
         filename::{outbox_html_filename, outbox_message_filename, outbox_sidecar_filename},
         message::{HeadersCache, MessageSidecar, OutboundStatus},
@@ -82,7 +85,7 @@ impl OutboxPipeline {
             dkim::ensure_ed25519_keypair(&self.layout.dkim_dir(), &self.env.dkim_selector)?;
         let signer = DkimSigner::from_material(&material)?;
 
-        fs::create_dir_all(self.layout.outbox())?;
+        create_dir_all(&self.layout.outbox())?;
 
         let text_body = markdown_to_text(&draft.body);
         let html_body = markdown_to_html(&draft.body);
@@ -248,7 +251,7 @@ impl OutboxPipeline {
         sidecar_path: &Path,
     ) -> Result<()> {
         let sent_dir = self.layout.sent();
-        fs::create_dir_all(&sent_dir)?;
+        create_dir_all(&sent_dir)?;
         let sent_message = sent_dir.join(&sidecar.filename);
         let sent_sidecar = sent_dir.join(
             sidecar_path
@@ -768,7 +771,7 @@ mod tests {
         let (_dir, layout, env, logger) = test_env();
         let pipeline = OutboxPipeline::new(layout.clone(), env, logger);
         let outbox_dir = layout.outbox();
-        fs::create_dir_all(&outbox_dir).unwrap();
+        create_dir_all(&outbox_dir).unwrap();
         fs::create_dir(outbox_dir.join("subdir")).unwrap();
 
         let mut sidecar = MessageSidecar::new(
@@ -799,7 +802,7 @@ mod tests {
         env.render_mode = "strict".into();
         let pipeline = OutboxPipeline::new(layout.clone(), env.clone(), logger);
         let outbox_dir = layout.outbox();
-        fs::create_dir_all(&outbox_dir).unwrap();
+        create_dir_all(&outbox_dir).unwrap();
         let message_path = outbox_dir.join("01ARZ3NDEKTSV4RRFFQ69G5FAV.eml");
         fs::write(&message_path, b"message").unwrap();
         let html_path = outbox_dir.join("01ARZ3NDEKTSV4RRFFQ69G5FAV.html");
@@ -836,7 +839,7 @@ mod tests {
         let (_dir, layout, env, logger) = test_env();
         let pipeline = OutboxPipeline::new(layout.clone(), env, logger);
         let outbox_dir = layout.outbox();
-        fs::create_dir_all(&outbox_dir).unwrap();
+        create_dir_all(&outbox_dir).unwrap();
         let sent_sidecar_path = outbox_dir.join("sent.yml");
         let mut sent_sidecar = MessageSidecar::new(
             "01ARZ3NDEKTSV4RRFFQ69G5FF0",
@@ -879,7 +882,7 @@ mod tests {
         let logger = Logger::new(layout.root(), LogLevel::Minimal).unwrap();
         let pipeline = OutboxPipeline::new(layout.clone(), env, logger.clone());
         let outbox_dir = layout.outbox();
-        fs::create_dir_all(&outbox_dir).unwrap();
+        create_dir_all(&outbox_dir).unwrap();
         let sidecar_path = outbox_dir.join("missing.yml");
         let sidecar = MessageSidecar::new(
             "01ARZ3NDEKTSV4RRFFQ69G5FF2",

@@ -1,12 +1,12 @@
 # Owl
 
-Owl is a file-first email hub designed for Raspberry Pi deployments. This repository contains a Rust implementation that focuses on deterministic behavior, reproducible builds, and complete test coverage.
+Owl is a file-first email hub designed for self-hosted deployments. This repository contains a Rust implementation that focuses on deterministic behavior, reproducible builds, and complete test coverage.
 
 The full implementation requirements live in [`SPEC.md`](SPEC.md); the codebase and CI are kept in sync with that document.
 
 ## Features
 
-- Canonical file layout rooted in `/home/pi/mail` with quarantine, routing lists, drafts, and sent mail directories.
+- Canonical file layout rooted in `~/mail` (or custom path) with quarantine, routing lists, drafts, and sent mail directories.
 - Pure-Rust pipelines for inbound delivery, outbox queueing, DKIM signing, SMTP dispatch, and retention pruning.
 - Deterministic filename generation with ULIDs and Unicode-safe subject slugs.
 - Configurable routing through `.rules` files with address, domain, and regex entries.
@@ -39,13 +39,35 @@ curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/install
 
 After install, the script can launch the built-in configuration wizard via `owl configure`.
 
-Run the background workers with the companion daemon binary:
+## Background Daemon
+
+The `owl-daemon` (or `owld`) binary provides background services for Owl:
+
+- **Filesystem watches**: Monitors quarantine and outbox directories for new messages
+- **Automatic processing**: Processes incoming mail and sends outbound messages
+- **Retention enforcement**: Periodically cleans up old messages based on retention policies
+
+Run the daemon with:
 
 ```bash
-cargo run --bin owl-daemon
+owl-daemon
+# or if installed as 'owld':
+owld
 ```
 
-Pass `--once` to perform a single reconciliation cycle, which is helpful for smoke-testing service installs.
+By default, it uses `~/mail/.env` for configuration. You can specify a custom path:
+
+```bash
+owl-daemon --env /path/to/.env
+```
+
+Pass `--once` to perform a single reconciliation cycle, which is helpful for smoke-testing service installs:
+
+```bash
+owl-daemon --once
+```
+
+**Note**: The daemon is required for automatic mail processing. Without it, you'll need to manually run `owl triage` to process incoming mail and `owl send` for outbound mail.
 
 `EnvConfig` supports loading from a `.env` file and falls back to sane defaults that match the starter configuration in [`env.sample`](env.sample).
 

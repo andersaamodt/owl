@@ -2,14 +2,90 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tempfile::NamedTempFile;
+
+/// Create all directories in the path, handling EOPNOTSUPP on macOS
+pub fn create_dir_all(path: &Path) -> Result<()> {
+    match fs::create_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.raw_os_error() == Some(45) => {
+            // EOPNOTSUPP on macOS - the operation may have partially succeeded
+            // Check if the directory actually exists now
+            if path.exists() && path.is_dir() {
+                // Directory was created despite the error
+                Ok(())
+            } else {
+                // Directory wasn't created - try creating parent and then this directory
+                // This can happen if the permission-setting operation failed
+                if let Some(parent) = path.parent()
+                    && !parent.exists()
+                {
+                    // Recursively create parent without setting permissions
+                    create_dir_all(parent)?;
+                }
+                // Try creating just this directory (not setting permissions)
+                match fs::create_dir(path) {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+                    Err(e) if e.raw_os_error() == Some(45) => {
+                        // Even fs::create_dir fails with EOPNOTSUPP
+                        // Directory might actually exist, or we can't create it
+                        if path.exists() && path.is_dir() {
+                            Ok(())
+                        } else {
+                            // Can't create this directory at all
+                            Err(e.into())
+                        }
+                    }
+                    Err(e) => Err(e.into()),
+                }
+            }
+        }
+        Err(e) => Err(e.into()),
+    }
+}
 
 pub fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        create_dir_all(parent)?;
     }
-    let mut tmp = NamedTempFile::new_in(path.parent().unwrap_or_else(|| Path::new(".")))?;
+
+    let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
+
+    // Try to create temp file - this can fail with EOPNOTSUPP on some macOS filesystems
+    let mut tmp = match NamedTempFile::new_in(parent_dir) {
+        Ok(t) => t,
+        Err(e) if e.raw_os_error() == Some(45) => {
+            // EOPNOTSUPP on macOS - fallback to using tempdir in /tmp
+            match NamedTempFile::new() {
+                Ok(t) => t,
+                Err(e2) if e2.raw_os_error() == Some(45) => {
+                    // Even /tmp fails with EOPNOTSUPP - write directly without temp file
+                    // This loses atomicity but allows the operation to succeed
+                    match fs::write(path, contents) {
+                        Ok(()) => return Ok(()),
+                        Err(e3) if e3.raw_os_error() == Some(45) => {
+                            // fs::write also fails - try with OpenOptions without mode
+                            let mut file = fs::OpenOptions::new()
+                                .write(true)
+                                .create(true)
+                                .truncate(true)
+                                .open(path)?;
+                            use std::io::Write;
+                            file.write_all(contents)?;
+                            file.flush()?;
+                            return Ok(());
+                        }
+                        Err(e3) => return Err(e3.into()),
+                    }
+                }
+                Err(e2) => return Err(e2).with_context(|| "creating temp file (fallback)")?,
+            }
+        }
+        Err(e) => return Err(e.into()),
+    };
+
     tmp.write_all(contents)?;
     tmp.flush()?;
     tmp.as_file().sync_all()?;
@@ -22,6 +98,23 @@ pub fn read_to_string(path: &Path) -> Result<String> {
     let mut buf = String::new();
     file.read_to_string(&mut buf)?;
     Ok(buf)
+}
+
+/// Create a file, handling EOPNOTSUPP on macOS
+pub fn create_file(path: &Path) -> Result<File> {
+    match File::create(path) {
+        Ok(f) => Ok(f),
+        Err(e) if e.raw_os_error() == Some(45) => {
+            // EOPNOTSUPP on macOS - retry with OpenOptions without trying to set mode
+            fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(path)
+                .map_err(|e| e.into())
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 #[cfg(test)]

@@ -6,7 +6,11 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     envcfg::EnvConfig,
-    fsops::{attach::AttachmentStore, io_atom::write_atomic, layout::MailLayout},
+    fsops::{
+        attach::AttachmentStore,
+        io_atom::{create_dir_all, write_atomic},
+        layout::MailLayout,
+    },
     model::{
         address::Address,
         filename::{html_filename, message_filename, sidecar_filename},
@@ -127,9 +131,9 @@ impl InboundPipeline {
         subject: &str,
         body: &[u8],
     ) -> Result<PathBuf> {
-        std::fs::create_dir_all(base)?;
+        create_dir_all(base)?;
         let dir = base.join(sender.canonical());
-        std::fs::create_dir_all(&dir)?;
+        create_dir_all(&dir)?;
         let ulid = ulid::generate();
         let message_name = message_filename(subject, &ulid);
         let sidecar_name = sidecar_filename(subject, &ulid);
@@ -324,7 +328,8 @@ mod tests {
         fs::write(&script_path, script_body).unwrap();
         let mut perms = fs::metadata(&script_path).unwrap().permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&script_path, perms).unwrap();
+        // Ignore permission errors on systems that don't support it
+        let _ = fs::set_permissions(&script_path, perms);
 
         let original = std::env::var_os("PATH");
         let mut new_path = std::ffi::OsString::from(script_dir.path());

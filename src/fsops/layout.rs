@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+use super::io_atom::create_dir_all;
+
 #[derive(Debug, Clone)]
 pub struct MailLayout {
     root: PathBuf,
@@ -58,13 +60,13 @@ impl MailLayout {
     }
 
     pub fn ensure(&self) -> Result<()> {
-        fs::create_dir_all(&self.root)?;
-        fs::create_dir_all(self.quarantine())?;
+        create_dir_all(&self.root)?;
+        create_dir_all(&self.quarantine())?;
         for list in ["accepted", "spam", "banned"] {
             self.ensure_list(list)?;
         }
         for leaf in ["drafts", "outbox", "sent", "logs", "dkim"] {
-            fs::create_dir_all(self.root.join(leaf))?;
+            create_dir_all(&self.root.join(leaf))?;
         }
         Ok(())
     }
@@ -87,8 +89,8 @@ impl MailLayout {
 
     fn ensure_list(&self, list: &str) -> Result<()> {
         let dir = self.root.join(list);
-        fs::create_dir_all(&dir)?;
-        fs::create_dir_all(dir.join("attachments"))?;
+        create_dir_all(&dir)?;
+        create_dir_all(&dir.join("attachments"))?;
         let rules = dir.join(".rules");
         if !rules.exists() {
             fs::write(&rules, b"# owl routing rules\n")?;

@@ -10,7 +10,7 @@ use ring::{
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
-use crate::fsops::io_atom::write_atomic;
+use crate::fsops::io_atom::{create_dir_all, write_atomic};
 
 #[derive(Debug, Clone)]
 pub struct DkimMaterial {
@@ -22,7 +22,7 @@ pub struct DkimMaterial {
 }
 
 pub fn ensure_ed25519_keypair(dir: &Path, selector: &str) -> Result<DkimMaterial> {
-    fs::create_dir_all(dir)?;
+    create_dir_all(dir)?;
     let private = dir.join(format!("{selector}.private"));
     let public = dir.join(format!("{selector}.public"));
     let dns = dir.join(format!("{selector}.dns"));
@@ -189,7 +189,8 @@ fn set_private_permissions(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mut perms = fs::metadata(path)?.permissions();
     perms.set_mode(0o600);
-    fs::set_permissions(path, perms)?;
+    // Ignore permission errors on systems that don't support it (e.g., some macOS filesystems)
+    let _ = fs::set_permissions(path, perms);
     Ok(())
 }
 

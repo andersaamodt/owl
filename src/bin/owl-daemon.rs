@@ -16,9 +16,23 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::flag;
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "owl-daemon", about = "Owl background worker", version)]
+#[command(
+    name = "owl-daemon",
+    about = "Owl background daemon - monitors quarantine/outbox and processes messages automatically",
+    long_about = "The Owl daemon (owld) provides background services:\n\
+                  - Watches quarantine directory for incoming messages\n\
+                  - Watches outbox directory for outgoing messages\n\
+                  - Automatically processes and routes mail\n\
+                  - Enforces retention policies\n\n\
+                  Run without arguments to use default configuration at ~/mail/.env",
+    version
+)]
 struct DaemonCli {
-    #[arg(long, default_value = "/home/pi/mail/.env")]
+    #[arg(
+        long,
+        default_value = "~/mail/.env",
+        help = "Path to .env file (~ expands to home)"
+    )]
     env: String,
 
     /// Run a single setup cycle and exit (used for tests)
@@ -32,7 +46,7 @@ fn main() -> Result<()> {
 }
 
 fn execute(cli: &DaemonCli) -> Result<()> {
-    let env_path = PathBuf::from(&cli.env);
+    let env_path = resolve_env_path(&cli.env)?;
     let env = if env_path.exists() {
         EnvConfig::from_file(&env_path)
             .with_context(|| format!("loading {}", env_path.display()))?
@@ -65,6 +79,22 @@ fn execute(cli: &DaemonCli) -> Result<()> {
     run_until_shutdown(handles, logger, term_flag, || {
         thread::sleep(Duration::from_millis(200))
     })
+}
+
+fn resolve_env_path(raw: &str) -> Result<PathBuf> {
+    if raw == "~" {
+        return home_dir();
+    }
+    if let Some(rest) = raw.strip_prefix("~/") {
+        return Ok(home_dir()?.join(rest));
+    }
+    Ok(PathBuf::from(raw))
+}
+
+fn home_dir() -> Result<PathBuf> {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .context("$HOME is not set")
 }
 
 fn mail_root(env_path: &Path) -> PathBuf {

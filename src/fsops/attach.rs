@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+use crate::fsops::io_atom::create_dir_all;
+
 pub struct AttachmentStore {
     root: PathBuf,
 }
@@ -20,7 +22,7 @@ impl AttachmentStore {
     }
 
     pub fn store(&self, name: &str, data: &[u8]) -> Result<StoredAttachment> {
-        fs::create_dir_all(&self.root)?;
+        create_dir_all(&self.root)?;
         let mut hasher = Sha256::new();
         hasher.update(data);
         let digest = hex::encode(hasher.finalize());

@@ -13,7 +13,10 @@ use tar::{Archive, Builder};
 
 use crate::{
     envcfg::EnvConfig,
-    fsops::{io_atom::write_atomic, layout::MailLayout},
+    fsops::{
+        io_atom::{create_dir_all, create_file, write_atomic},
+        layout::MailLayout,
+    },
     model::{address::Address, message::MessageSidecar},
     ops::install as ops_install,
     pipeline::{
@@ -32,63 +35,94 @@ use anyhow::{Context, Result, anyhow, bail};
 #[derive(Parser, Debug, Clone)]
 #[command(name = "owl", version, about = "File-first mail system")]
 pub struct OwlCli {
-    #[arg(long, default_value = "/home/pi/mail/.env")]
+    #[arg(
+        long,
+        default_value = "~/mail/.env",
+        help = "Path to the .env file (~ expands to home directory)"
+    )]
     pub env: String,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
 
-    #[arg(long)]
+    #[arg(long, help = "Enable JSON output for supported commands")]
     pub json: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
+    #[command(about = "Bootstrap mail storage, DKIM keys, and system hooks")]
     Install,
+    #[command(about = "Re-apply provisioning hooks and ensure layout exists")]
     Update,
+    #[command(about = "Restart Owl services via systemctl")]
     Restart {
-        #[arg(value_enum, default_value_t = RestartTarget::All)]
+        #[arg(value_enum, default_value_t = RestartTarget::All, help = "Service to restart")]
         target: RestartTarget,
     },
+    #[command(about = "Reload routing rules without restarting the daemon")]
     Reload,
+    #[command(about = "List messages in quarantine or a specific list")]
     Triage {
-        #[arg(long)]
+        #[arg(long, help = "Filter by sender address")]
         address: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = "List to triage (quarantine, accepted, spam, banned)")]
         list: Option<String>,
     },
+    #[command(about = "Show sender directories for one list or all lists")]
     ListSenders {
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "List to show senders from (quarantine, accepted, spam, banned)"
+        )]
         list: Option<String>,
     },
+    #[command(about = "Move all mail for a sender between lists")]
     MoveSender {
+        #[arg(help = "Source list")]
         from: String,
+        #[arg(help = "Destination list")]
         to: String,
+        #[arg(help = "Sender address to move")]
         address: String,
     },
+    #[command(about = "Toggle the pinned flag for all messages from a sender")]
     Pin {
+        #[arg(help = "Sender address to pin/unpin")]
         address: String,
-        #[arg(long)]
+        #[arg(long, help = "Remove the pinned flag instead of setting it")]
         unset: bool,
     },
+    #[command(about = "Queue a draft for delivery")]
     Send {
+        #[arg(help = "Draft file path or ULID")]
         draft: String,
     },
+    #[command(about = "Create a tarball of the mail root")]
     Backup {
+        #[arg(help = "Output path for the backup tarball")]
         path: PathBuf,
     },
+    #[command(about = "Export a single sender to a tarball")]
     ExportSender {
+        #[arg(help = "List to export from")]
         list: String,
+        #[arg(help = "Sender address to export")]
         address: String,
+        #[arg(help = "Output path for the tarball")]
         path: PathBuf,
     },
+    #[command(about = "Import legacy archives into quarantine")]
     Import {
+        #[arg(help = "Path to maildir, mbox, or tar.gz archive")]
         source: PathBuf,
     },
+    #[command(about = "Render structured logs")]
     Logs {
-        #[arg(value_enum, default_value_t = LogAction::Show)]
+        #[arg(value_enum, default_value_t = LogAction::Show, help = "Action to perform on logs")]
         action: LogAction,
     },
+    #[command(about = "Run the interactive configuration wizard")]
     Configure,
 }
 
@@ -107,7 +141,7 @@ pub enum LogAction {
     Tail,
 }
 
-const DEFAULT_ENV_PATH: &str = "/home/pi/mail/.env";
+const DEFAULT_ENV_PATH_TEMPLATE: &str = "~/mail/.env";
 
 pub fn run(cli: OwlCli, env: EnvConfig) -> Result<String> {
     let env_path = resolve_env_path(&cli.env)?;
@@ -205,7 +239,7 @@ fn configure(env_path: &Path, env: &EnvConfig, logger: &Logger) -> Result<String
         Some(default_root.to_string_lossy().as_ref()),
     )?;
     let mail_root = PathBuf::from(mail_root);
-    fs::create_dir_all(&mail_root)?;
+    create_dir_all(&mail_root)?;
 
     let default_env = if env_path.as_os_str().is_empty() {
         mail_root.join(".env")
@@ -661,7 +695,7 @@ fn move_sender(
     }
 
     if let Some(parent) = dest_dir.parent() {
-        fs::create_dir_all(parent)?;
+        create_dir_all(parent)?;
     }
     fs::rename(&source_dir, &dest_dir)?;
 
@@ -670,7 +704,7 @@ fn move_sender(
     if keep_attachments {
         let source_attachments = layout.attachments(from_list);
         let dest_attachments = layout.attachments(to_list);
-        fs::create_dir_all(&dest_attachments)?;
+        create_dir_all(&dest_attachments)?;
         for attachment in attachments {
             let src = source_attachments.join(&attachment);
             if !src.exists() {
@@ -830,9 +864,9 @@ fn backup_mail(env_path: &Path, target: &Path) -> Result<String> {
     if let Some(parent) = target.parent()
         && !parent.as_os_str().is_empty()
     {
-        fs::create_dir_all(parent)?;
+        create_dir_all(parent)?;
     }
-    let file = File::create(target).with_context(|| format!("creating {}", target.display()))?;
+    let file = create_file(target).with_context(|| format!("creating {}", target.display()))?;
     let encoder = GzEncoder::new(file, Compression::default());
     let mut builder = Builder::new(encoder);
     builder.append_dir_all(".", &root)?;
@@ -860,9 +894,9 @@ fn export_sender(
     if let Some(parent) = target.parent()
         && !parent.as_os_str().is_empty()
     {
-        fs::create_dir_all(parent)?;
+        create_dir_all(parent)?;
     }
-    let file = File::create(target).with_context(|| format!("creating {}", target.display()))?;
+    let file = create_file(target).with_context(|| format!("creating {}", target.display()))?;
     let encoder = GzEncoder::new(file, Compression::default());
     let mut builder = Builder::new(encoder);
     builder.append_dir_all(format!("{list_name}/{canonical}"), &sender_dir)?;
@@ -1068,7 +1102,8 @@ where
     F: Fn() -> Result<PathBuf>,
 {
     if raw.is_empty() {
-        return Ok(PathBuf::from(DEFAULT_ENV_PATH));
+        // Use default template with home directory expansion
+        return resolve_env_path_with_home(DEFAULT_ENV_PATH_TEMPLATE, home);
     }
     if raw == "~" {
         return home();
@@ -1255,7 +1290,7 @@ fn upsert_env_setting(env_path: &Path, key: &str, value: &str) -> Result<()> {
 
 fn set_rules_entry(path: &Path, entry: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        create_dir_all(parent)?;
     }
     if path.exists() {
         let data = fs::read_to_string(path)?;
@@ -1285,7 +1320,7 @@ fn set_settings_file(
     list_status: &str,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        create_dir_all(parent)?;
     }
     let settings = format!(
         "list_status={list_status}\n\
@@ -1363,7 +1398,7 @@ mod tests {
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
         let sender_dir = layout.quarantine().join("alice@example.org");
-        fs::create_dir_all(&sender_dir).unwrap();
+        create_dir_all(&sender_dir).unwrap();
         let subject = "Greetings";
         let ulid = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
         let mut sidecar = MessageSidecar::new(
@@ -1405,7 +1440,7 @@ mod tests {
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
         let sender_dir = layout.accepted().join("carol@example.org");
-        fs::create_dir_all(&sender_dir).unwrap();
+        create_dir_all(&sender_dir).unwrap();
         let subject = "Follow up";
         let ulid = "01ARZ3NDEKTSV4RRFFQ69G5FD0";
         let mut sidecar = MessageSidecar::new(
@@ -1473,7 +1508,7 @@ mod tests {
         let layout = MailLayout::new(dir.path());
         layout.ensure().unwrap();
         let sender_dir = layout.accepted().join("bob@example.org");
-        fs::create_dir_all(&sender_dir).unwrap();
+        create_dir_all(&sender_dir).unwrap();
         let ulid = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
         let mut sidecar = MessageSidecar::new(
             ulid,
@@ -2050,7 +2085,8 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mut perms = fs::metadata(&path).unwrap().permissions();
             perms.set_mode(0o755);
-            fs::set_permissions(&path, perms).unwrap();
+            // Ignore permission errors on systems that don't support it
+            let _ = fs::set_permissions(&path, perms);
         }
     }
 
@@ -2405,7 +2441,8 @@ mod tests {
                 use std::os::unix::fs::PermissionsExt;
                 let mut perms = fs::metadata(&path).unwrap().permissions();
                 perms.set_mode(0o755);
-                fs::set_permissions(&path, perms).unwrap();
+                // Ignore permission errors on systems that don't support it
+                let _ = fs::set_permissions(&path, perms);
             }
         }
 
@@ -2448,7 +2485,8 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mut perms = fs::metadata(&exec).unwrap().permissions();
             perms.set_mode(0o755);
-            fs::set_permissions(&exec, perms).unwrap();
+            // Ignore permission errors on systems that don't support it
+            let _ = fs::set_permissions(&exec, perms);
         }
         let original = std::env::var_os("PATH");
         let mut new_path = std::ffi::OsString::from(dir.path());
@@ -2491,12 +2529,14 @@ mod tests {
 
     #[test]
     fn resolve_env_path_expands_defaults() {
-        let default = resolve_env_path("").unwrap();
-        assert_eq!(default, PathBuf::from(DEFAULT_ENV_PATH));
         let closure = || Ok(PathBuf::from("/home/example"));
-        let tilde = resolve_env_path_with_home("~/mail/.env", closure).unwrap();
+        let default = resolve_env_path_with_home("", closure).unwrap();
+        assert_eq!(default, PathBuf::from("/home/example/mail/.env"));
+        let tilde =
+            resolve_env_path_with_home("~/mail/.env", || Ok(PathBuf::from("/home/example")))
+                .unwrap();
         assert_eq!(tilde, PathBuf::from("/home/example/mail/.env"));
-        let bare = resolve_env_path_with_home("~", closure).unwrap();
+        let bare = resolve_env_path_with_home("~", || Ok(PathBuf::from("/home/example"))).unwrap();
         assert_eq!(bare, PathBuf::from("/home/example"));
     }
 

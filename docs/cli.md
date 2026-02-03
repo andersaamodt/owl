@@ -4,7 +4,7 @@ The `owl` CLI is the primary interface for provisioning, triage, and maintenance
 
 ## Global flags
 
-- `--env <path>`: path to the `.env` file (defaults to `/home/pi/mail/.env`).
+- `--env <path>`: path to the `.env` file (defaults to `~/mail/.env`, tilde expands to home directory).
 - `--json`: enable JSON output for supported commands (currently `triage` and `logs`).
 
 ## Commands

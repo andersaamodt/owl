@@ -35,10 +35,18 @@ mod tests {
 
     fn write_script(dir: &tempfile::TempDir, name: &str, body: &str) -> String {
         let path = dir.path().join(name);
-        fs::write(&path, body).unwrap();
+        // Write and ensure file is fully synced
+        {
+            let mut file = fs::File::create(&path).unwrap();
+            use std::io::Write;
+            file.write_all(body.as_bytes()).unwrap();
+            file.sync_all().unwrap();
+            // File is dropped and closed here
+        }
         let mut perms = fs::metadata(&path).unwrap().permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&path, perms).unwrap();
+        // Ignore permission errors on systems that don't support it
+        let _ = fs::set_permissions(&path, perms);
         path.to_string_lossy().into()
     }
 
