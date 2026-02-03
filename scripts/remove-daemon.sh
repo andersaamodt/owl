@@ -56,9 +56,9 @@ remove_launchd() {
   
   if [ -f "$plist_path" ]; then
     # Try bootout first (modern macOS), fall back to unload
-    # The service target is gui/<uid>/com.owl.daemon
+    # bootout expects domain target and service path
     uid=$(id -u)
-    launchctl bootout "gui/$uid/com.owl.daemon" 2>/dev/null || \
+    launchctl bootout "gui/$uid" "$plist_path" 2>/dev/null || \
       launchctl unload "$plist_path" 2>/dev/null || true
     rm -f "$plist_path"
     log "Removed com.owl.daemon.plist from $user_agent_dir/"

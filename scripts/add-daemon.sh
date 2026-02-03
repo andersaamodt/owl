@@ -98,7 +98,8 @@ install_launchd() {
   
   # Use bootstrap for macOS 10.11+ if available, fall back to load
   # bootstrap is the recommended modern approach
-  if launchctl bootstrap gui/"$(id -u)" "$user_agent_dir/com.owl.daemon.plist" 2>/dev/null; then
+  uid=$(id -u)
+  if launchctl bootstrap "gui/$uid" "$user_agent_dir/com.owl.daemon.plist" 2>/dev/null; then
     log "Installed com.owl.daemon.plist to $user_agent_dir/"
     log "Service will start at login"
   elif launchctl load "$user_agent_dir/com.owl.daemon.plist" 2>/dev/null; then
