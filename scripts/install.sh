@@ -205,7 +205,7 @@ setup_daemon_service() {
     return
   fi
   
-  if prompt_yes_no "Would you like to set up Owl daemon to start at system startup?" "n"; then
+  if prompt_yes_no "Would you like to set up Owl daemon to start automatically?" "n"; then
     log "Setting up daemon service..."
     if sh "$script_dir/add-daemon.sh"; then
       log "Daemon service installed successfully!"

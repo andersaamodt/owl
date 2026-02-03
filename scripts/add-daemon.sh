@@ -49,20 +49,25 @@ install_systemd() {
   user="${3:-$(whoami)}"
   
   service_file="/tmp/owld.service.$$"
-  sed -e "s|%INSTALL_DIR%|$install_dir|g" \
-      -e "s|%MAIL_ROOT%|$mail_root|g" \
-      -e "s|%USER%|$user|g" \
-      "$(dirname "$0")/owld.service" > "$service_file"
   
   if [ "$(id -u)" -eq 0 ]; then
     # System-wide installation
+    sed -e "s|%INSTALL_DIR%|$install_dir|g" \
+        -e "s|%MAIL_ROOT%|$mail_root|g" \
+        -e "s|%USER%|$user|g" \
+        "$(dirname "$0")/owld.service" > "$service_file"
     install -m 0644 "$service_file" /etc/systemd/system/owld.service
     systemctl daemon-reload
     systemctl enable owld.service
     log "Installed owld.service to /etc/systemd/system/"
     log "Start with: systemctl start owld"
   else
-    # User-level installation
+    # User-level installation - use default.target instead of multi-user.target
+    sed -e "s|%INSTALL_DIR%|$install_dir|g" \
+        -e "s|%MAIL_ROOT%|$mail_root|g" \
+        -e "s|%USER%|$user|g" \
+        -e "s|WantedBy=multi-user.target|WantedBy=default.target|g" \
+        "$(dirname "$0")/owld.service" > "$service_file"
     user_unit_dir="$HOME/.config/systemd/user"
     mkdir -p "$user_unit_dir"
     install -m 0644 "$service_file" "$user_unit_dir/owld.service"
