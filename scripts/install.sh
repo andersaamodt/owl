@@ -179,17 +179,98 @@ prompt_yes_no() {
   done
 }
 
+print_welcome() {
+  log ""
+  log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  log "              Owl - File-First Email System"
+  log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  log ""
+  log "Owl is a self-hosted email system that stores your mail as files,"
+  log "making it easy to sync, backup, and manage with standard tools."
+  log ""
+  log "This installer will set you up to:"
+  log "  • Receive and organize incoming mail"
+  log "  • Send outgoing messages with DKIM signing"
+  log "  • Route mail to custom lists (accepted, spam, banned)"
+  log "  • Run an optional background daemon for automatic processing"
+  log ""
+  log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  log ""
+}
+
+setup_daemon_service() {
+  script_dir="$(dirname "$0")"
+  if [ ! -f "$script_dir/add-daemon.sh" ]; then
+    log "Daemon setup script not found. Skipping daemon setup."
+    return
+  fi
+  
+  if prompt_yes_no "Would you like to set up Owl daemon to start automatically?" "n"; then
+    log "Setting up daemon service..."
+    if sh "$script_dir/add-daemon.sh"; then
+      log "Daemon service installed successfully!"
+    else
+      log "Failed to install daemon service. You can try manually later with:"
+      log "  sh $script_dir/add-daemon.sh"
+    fi
+  else
+    log "Daemon setup skipped. You can run it later with:"
+    log "  sh $script_dir/add-daemon.sh"
+    log ""
+    log "Or start the daemon manually when needed:"
+    log "  owl-daemon"
+  fi
+}
+
+print_tips() {
+  log ""
+  log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  log "              Installation Complete!"
+  log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  log ""
+  log "Useful commands to get started:"
+  log ""
+  log "  owl triage              # View messages in quarantine"
+  log "  owl list-senders        # Show all senders across lists"
+  log "  owl move-sender <addr> <list>  # Move sender to a list"
+  log "  owl send <draft-id>     # Queue a draft for sending"
+  log "  owl logs                # View system logs"
+  log "  owl-daemon              # Start background processor manually"
+  log ""
+  log "Configuration files:"
+  log ""
+  log "  ~/mail/.env             # Main configuration"
+  log "  ~/mail/accepted/.rules  # Routing rules for accepted mail"
+  log "  ~/mail/spam/.rules      # Routing rules for spam"
+  log ""
+  log "Tips:"
+  log ""
+  log "  • Run 'owl configure' to set up SMTP and customize settings"
+  log "  • Messages arrive in ~/mail/quarantine/ until routed"
+  log "  • Use .rules files to automatically route mail to lists"
+  log "  • The daemon processes mail automatically in the background"
+  log "  • Without the daemon, run 'owl triage' and 'owl send' manually"
+  log ""
+  log "Documentation: https://github.com/owl-mail/owl"
+  log ""
+  log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  log ""
+}
+
 main() {
-  log "Owl installer"
+  print_welcome
+  
   log "Repository: $OWL_REPO"
   target=$(resolve_target)
   log "Detected target: $target"
+  log ""
 
   if ! install_from_release "$target" "$OWL_REPO" "$OWL_VERSION"; then
     log "release assets not found; falling back to source build"
     install_from_source "$OWL_REPO"
   fi
 
+  log ""
   if prompt_yes_no "Would you like to configure Owl now?" "y"; then
     if command -v owl >/dev/null 2>&1; then
       owl configure
@@ -200,6 +281,11 @@ main() {
   else
     log "Configuration skipped. You can run: owl configure"
   fi
+
+  log ""
+  setup_daemon_service
+
+  print_tips
 }
 
 main "$@"
