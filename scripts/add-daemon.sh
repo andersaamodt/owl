@@ -84,6 +84,9 @@ install_launchd() {
   install_dir="$1"
   mail_root="$2"
   
+  # Ensure logs directory exists for daemon output
+  mkdir -p "$mail_root/logs"
+  
   plist_file="/tmp/com.owl.daemon.plist.$$"
   sed -e "s|%INSTALL_DIR%|$install_dir|g" \
       -e "s|%MAIL_ROOT%|$mail_root|g" \
