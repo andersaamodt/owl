@@ -580,6 +580,22 @@ SH
   ' >/dev/null
 }
 
+stale_bundled_secure_chat_hook_path_resolves_to_current_hook() {
+  root="$tmpdir/stale-secure-chat-hook/mail"
+  backend prepare "$root" >/dev/null
+  conf="$root/.transport/simplex/default/profile.conf"
+  mkdir -p "$(dirname "$conf")"
+  {
+    printf '%s\n' 'transport_hook=/Users/example/git/owl-native/scripts/owl-native-secure-chat-hook.sh'
+    printf '%s\n' 'secure_chat_ssh_host=test-host'
+    printf '%s\n' 'secure_chat_export_command=/remote/blog-secure-chat-owl-export'
+    printf '%s\n' 'secure_chat_send_command=/remote/blog-secure-chat-owl-send'
+  } >"$conf"
+  backend simplex-transport-status "$root" default | jq -e \
+    --arg hook "$repo_dir/scripts/owl-secure-chat-hook.sh" \
+    '.hook_ready == true and .hook_path == $hook' >/dev/null
+}
+
 install_simplex_cli_delegates_to_wizardry_installer() {
   root="$tmpdir/install-wizardry/mail"
   fake_dir="$tmpdir/fake-wizardry"
@@ -644,6 +660,7 @@ run_case "SimpleX tick uses transport hook for poll and send" simplex_tick_uses_
 run_case "SimpleX tick sends queued outbox before polling" simplex_tick_sends_before_polling
 run_case "SimpleX tick dedupes by remote id, not repeated body text" simplex_tick_dedupes_by_remote_id_not_body
 run_case "bundled SimpleX local transport is end-to-end" bundled_simplex_local_transport_is_end_to_end
+run_case "stale bundled Secure Chat hook path resolves to current hook" stale_bundled_secure_chat_hook_path_resolves_to_current_hook
 run_case "Secure Chat transport imports and replies over SSH hook" secure_chat_transport_imports_and_replies_over_ssh_hook
 run_case "install SimpleX CLI delegates to Wizardry installable" install_simplex_cli_delegates_to_wizardry_installer
 run_case "invalid action fails" invalid_action_fails

@@ -807,6 +807,7 @@ swift_remote_server_setup_walkthrough_exists() {
   grep -Fq 'Label("Send Test Email", systemImage: "paperplane")' generated/macos/Sources/App/App.swift
   grep -Fq 'Text(session.remoteStatusSummary)' generated/macos/Sources/App/App.swift
   grep -Fq 'settings-remote-deploy)' scripts/owl-backend.sh
+  grep -Fq 'OWL_MAIL_LIST_TIMEOUT_SECONDS:-15' scripts/owl-backend.sh
   grep -Fq 'OWL_REMOTE_DEPLOY_TIMEOUT_SECONDS:-1800' scripts/owl-backend.sh
   grep -Fq 'OWL_REMOTE_TLS_TIMEOUT_SECONDS:-900' scripts/owl-backend.sh
   grep -Fq '../owl-nonnative/scripts/owl-desktop-backend.sh' scripts/owl-backend.sh

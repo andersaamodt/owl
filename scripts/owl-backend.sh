@@ -485,6 +485,9 @@ resolve_owl_backend_script() {
 
 owl_backend_timeout_seconds() {
   case "$owl_action" in
+    list-messages|list-messages-fast|list-inbox-bundle-fast|list-archive-bundle)
+      printf '%s\n' "${OWL_MAIL_LIST_TIMEOUT_SECONDS:-15}"
+      ;;
     settings-remote-deploy)
       printf '%s\n' "${OWL_REMOTE_DEPLOY_TIMEOUT_SECONDS:-1800}"
       ;;
@@ -498,7 +501,7 @@ owl_backend_timeout_seconds() {
       printf '%s\n' "${OWL_LLM_ACTION_TIMEOUT_SECONDS:-900}"
       ;;
     *)
-      printf '%s\n' "${OWL_OWL_TIMEOUT_SECONDS:-1}"
+      printf '%s\n' "${OWL_OWL_TIMEOUT_SECONDS:-5}"
       ;;
   esac
 }
@@ -1864,7 +1867,26 @@ simplex_transport_hook_path() {
     printf '%s\n' "$OWL_SIMPLEX_TRANSPORT_HOOK"
     return 0
   fi
-  config_get "$(simplex_profile_conf "$ident")" transport_hook 2>/dev/null || return 1
+  conf=$(simplex_profile_conf "$ident")
+  configured_hook=$(config_get "$conf" transport_hook 2>/dev/null || printf '')
+  if [ -n "$configured_hook" ] && [ -x "$configured_hook" ]; then
+    printf '%s\n' "$configured_hook"
+    return 0
+  fi
+  case "$configured_hook" in
+    */owl-native-secure-chat-hook.sh|*/owl-secure-chat-hook.sh)
+      if config_get "$conf" secure_chat_ssh_host >/dev/null 2>&1; then
+        hook=$(secure_chat_transport_hook)
+        [ -x "$hook" ] && { printf '%s\n' "$hook"; return 0; }
+      fi
+      ;;
+    */owl-native-simplex-local-hook.sh|*/owl-simplex-local-hook.sh)
+      hook=$(default_simplex_transport_hook)
+      [ -x "$hook" ] && { printf '%s\n' "$hook"; return 0; }
+      ;;
+  esac
+  [ -n "$configured_hook" ] && { printf '%s\n' "$configured_hook"; return 0; }
+  return 1
 }
 
 set_simplex_transport_hook_action() {
