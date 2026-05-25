@@ -1591,28 +1591,13 @@ private final class OwlSession: ObservableObject {
 
   private func loadInitialSnapshot() async {
     if isRefreshingSnapshot { return }
-    startupMessage = "Loading mailbox..."
     lastRefreshAt = Date()
     let root = mailRoot
     isRefreshingSnapshot = true
     do {
       let next = try await OwlBackend.snapshot(root: root)
       self.apply(snapshot: next)
-      var loaded = next
-      startupMessage = "Checking incoming messages..."
-      var transportWarning: String?
-      do {
-        lastTransportTickAt = Date()
-        let transportResponse = try await OwlBackend.tickSimpleX(root: root)
-        if transportResponse.changedLocalState {
-          startupMessage = "Loading new messages..."
-          loaded = try await OwlBackend.snapshot(root: root)
-          self.apply(snapshot: loaded)
-        }
-      } catch {
-        transportWarning = "SimpleX transport check failed: \(error.localizedDescription)"
-      }
-      self.statusText = transportWarning ?? "Loaded \(loaded.threads.count) conversations from \(loaded.root)"
+      self.statusText = "Loaded \(next.threads.count) conversations from \(next.root)"
       self.hasLoadedInitialSnapshot = true
       self.startupErrorMessage = nil
       self.isRefreshingSnapshot = false
@@ -3214,38 +3199,14 @@ private struct RootView: View {
 }
 
 private struct StartupSplashView: View {
-  @EnvironmentObject private var session: OwlSession
-
   var body: some View {
-    VStack(spacing: 18) {
+    VStack {
       Image(nsImage: NSApp.applicationIconImage)
         .resizable()
         .scaledToFit()
         .frame(width: 96, height: 96)
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .shadow(color: Color.black.opacity(0.12), radius: 12, x: 0, y: 5)
-      ProgressView()
-        .controlSize(.small)
-      VStack(spacing: 5) {
-        Text(session.startupMessage)
-          .font(.callout.weight(.semibold))
-          .foregroundStyle(.primary)
-        if let error = session.startupErrorMessage {
-          Text(error)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .lineLimit(3)
-            .frame(maxWidth: 420)
-          Button {
-            session.retryInitialLoad()
-          } label: {
-            Label("Retry", systemImage: "arrow.clockwise")
-          }
-          .controlSize(.small)
-          .padding(.top, 4)
-        }
-      }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Color(nsColor: .windowBackgroundColor))
@@ -3593,22 +3554,28 @@ private struct PrimaryTabBar: View {
   @EnvironmentObject private var session: OwlSession
 
   var body: some View {
-    HStack(spacing: 8) {
-      TabButton(title: "New Senders", systemImage: "tray.and.arrow.down", count: session.newSenderThreads.count, selected: session.selectedRoute == "new") {
-        session.openNewSenders()
+    Group {
+      if session.hasLoadedInitialSnapshot {
+        HStack(spacing: 8) {
+          TabButton(title: "New Senders", systemImage: "tray.and.arrow.down", count: session.newSenderThreads.count, selected: session.selectedRoute == "new") {
+            session.openNewSenders()
+          }
+          TabButton(title: "Inbox", systemImage: "tray.full", count: session.snapshot.inbox.count, selected: session.selectedRoute == "inbox" || session.selectedRoute == "inbox-message") {
+            session.openInbox(focusing: nil)
+          }
+          TabButton(title: "Mail", systemImage: "envelope", selected: session.selectedRoute == "mail") {
+            session.openMail()
+          }
+          ArchiveTabButton(selected: session.selectedRoute == "archive") {
+            session.openArchive()
+          }
+          Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 6)
+      } else {
+        Color.clear
       }
-      TabButton(title: "Inbox", systemImage: "tray.full", count: session.snapshot.inbox.count, selected: session.selectedRoute == "inbox" || session.selectedRoute == "inbox-message") {
-        session.openInbox(focusing: nil)
-      }
-      TabButton(title: "Mail", systemImage: "envelope", selected: session.selectedRoute == "mail") {
-        session.openMail()
-      }
-      ArchiveTabButton(selected: session.selectedRoute == "archive") {
-        session.openArchive()
-      }
-      Spacer(minLength: 0)
     }
-    .padding(.horizontal, 6)
     .frame(width: 500, height: 34, alignment: .leading)
   }
 }

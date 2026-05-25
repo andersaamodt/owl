@@ -239,6 +239,39 @@ snapshot_includes_owl_mailboxes_drafts_events_settings() {
   ' >/dev/null
 }
 
+snapshot_reads_mail_sidecars_locally() {
+  root="$tmpdir/snapshot-sidecars/mail"
+  mkdir -p "$tmpdir/home" "$root/accepted/alice@example.org" "$root/archive/bob@example.org"
+  cat >"$root/accepted/alice@example.org/.Hello (01A).yml" <<'YAML'
+schema: 1
+ulid: 01A
+status_shadow: accepted
+read: false
+starred: true
+received_at: 2026-05-25T07:00:00Z
+headers_cache:
+  from: Alice <alice@example.org>
+  subject: Hello
+YAML
+  cat >"$root/archive/bob@example.org/.Archived (01B).yml" <<'YAML'
+schema: 1
+ulid: 01B
+status_shadow: archive
+read: true
+received_at: 2026-05-24T07:00:00Z
+headers_cache:
+  from: Bob <bob@example.org>
+  subject: Archived
+YAML
+  snapshot=$(backend snapshot "$root")
+  printf '%s\n' "$snapshot" | jq -e '
+    ([.mailboxes[] | select(.id == "accepted")][0].count == 1) and
+    ([.mailboxes[] | select(.id == "archive")][0].count == 1) and
+    (.messages | map(select(.transport == "email")) | length) == 2 and
+    (.inbox | length) == 1
+  ' >/dev/null
+}
+
 snapshot_lines_exposes_native_gtk_feed() {
   root="$tmpdir/snapshot-lines/mail"
   fake="$tmpdir/fake-owl-lines.sh"
@@ -652,6 +685,7 @@ run_case "SimpleX trash stages a file for system Trash" simplex_trash_stages_fil
 run_case "bootstrap status is structured" bootstrap_status_is_structured
 run_case "bootstrap status detects Wizardry SimpleX install" bootstrap_status_detects_wizardry_simplex_install
 run_case "snapshot includes Owl mailboxes, drafts, events, and settings" snapshot_includes_owl_mailboxes_drafts_events_settings
+run_case "snapshot reads mail sidecars locally" snapshot_reads_mail_sidecars_locally
 run_case "snapshot lines exposes native GTK feed" snapshot_lines_exposes_native_gtk_feed
 run_case "Owl actions are hard allowlisted and pass through" owl_actions_are_hard_allowlisted_and_passthrough
 run_case "UI prefs are plaintext XDG state" ui_prefs_are_plaintext_xdg_state

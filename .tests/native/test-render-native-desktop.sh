@@ -68,15 +68,24 @@ swift_uses_native_desktop_idiom() {
   grep -Fq 'private struct StartupSplashView: View' generated/macos/Sources/App/App.swift
   grep -Fq 'if session.hasLoadedInitialSnapshot {' generated/macos/Sources/App/App.swift
   grep -Fq 'Image(nsImage: NSApp.applicationIconImage)' generated/macos/Sources/App/App.swift
+  grep -Fq 'Color.clear' generated/macos/Sources/App/App.swift
   grep -Fq 'func retryInitialLoad()' generated/macos/Sources/App/App.swift
   grep -Fq 'private func loadInitialSnapshot() async' generated/macos/Sources/App/App.swift
-  grep -Fq 'startupMessage = "Checking incoming messages..."' generated/macos/Sources/App/App.swift
-  grep -Fq 'let transportResponse = try await OwlBackend.tickSimpleX(root: root)' generated/macos/Sources/App/App.swift
-  grep -Fq 'startupMessage = "Loading new messages..."' generated/macos/Sources/App/App.swift
-  grep -Fq 'loaded = try await OwlBackend.snapshot(root: root)' generated/macos/Sources/App/App.swift
-  grep -Fq 'self.statusText = transportWarning ?? "Loaded \\(loaded.threads.count) conversations from \\(loaded.root)"' generated/macos/Sources/App/App.swift
+  grep -Fq 'self.statusText = "Loaded \\(next.threads.count) conversations from \\(next.root)"' generated/macos/Sources/App/App.swift
   grep -Fq 'self.hasLoadedInitialSnapshot = true' generated/macos/Sources/App/App.swift
   grep -Fq 'Task { await loadInitialSnapshot() }' generated/macos/Sources/App/App.swift
+  ! awk '
+    /private struct StartupSplashView: View/ { in_view = 1 }
+    /private struct ToastOverlay: View/ { in_view = 0 }
+    in_view && /ProgressView|startupMessage|startupErrorMessage|Retry/ { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' generated/macos/Sources/App/App.swift
+  ! awk '
+    /private func loadInitialSnapshot[(][)] async/ { in_view = 1 }
+    /func refresh[(][)]/ { in_view = 0 }
+    in_view && /OwlBackend[.]tickSimpleX/ { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' generated/macos/Sources/App/App.swift
   ! grep -Fq 'snapshot = SeedData.snapshot' generated/macos/Sources/App/App.swift
   ! grep -Fq 'Using seed state' generated/macos/Sources/App/App.swift
   grep -q 'PrimaryTabBar' generated/macos/Sources/App/App.swift
