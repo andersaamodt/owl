@@ -6,8 +6,8 @@ static const char *wizardry_app_ir =
   "  \"version\": \"native-desktop-ir/v1\",\n"
   "  \"format\": \"yaml-1.2-json-compatible\",\n"
   "  \"app\": {\n"
-  "    \"id\": \"owl\",\n"
-  "    \"name\": \"Owl\",\n"
+  "    \"id\": \"stellar\",\n"
+  "    \"name\": \"Stellar\",\n"
   "    \"targets\": [\n"
   "      \"macos\",\n"
   "      \"linux\"\n"
@@ -111,7 +111,7 @@ static const char *wizardry_app_ir =
   "      \"id\": \"window.main\",\n"
   "      \"name\": \"mainWindow\",\n"
   "      \"type\": \"Window\",\n"
-  "      \"title\": \"Owl\",\n"
+  "      \"title\": \"Stellar\",\n"
   "      \"width\": 128,\n"
   "      \"minWidth\": 96,\n"
   "      \"height\": 82,\n"
@@ -123,7 +123,7 @@ static const char *wizardry_app_ir =
   "          {\n"
   "            \"id\": \"menu.app\",\n"
   "            \"type\": \"Menu\",\n"
-  "            \"title\": \"Owl\",\n"
+  "            \"title\": \"Stellar\",\n"
   "            \"children\": [\n"
   "              {\n"
   "                \"id\": \"menuitem.settings\",\n"
@@ -370,20 +370,20 @@ static char *default_mail_root(void) {
 }
 
 static char *resolve_backend_script(void) {
-  const char *override = g_getenv("OWL_BACKEND");
+  const char *override = g_getenv("STELLAR_BACKEND");
   if (override != NULL && *override != '\0' && g_file_test(override, G_FILE_TEST_EXISTS)) {
     return g_strdup(override);
   }
 
   char *cwd = g_get_current_dir();
-  char *candidate = g_build_filename(cwd, "../../scripts/owl-backend.sh", NULL);
+  char *candidate = g_build_filename(cwd, "../../scripts/stellar-backend.sh", NULL);
   if (g_file_test(candidate, G_FILE_TEST_EXISTS)) {
     g_free(cwd);
     return candidate;
   }
   g_free(candidate);
 
-  candidate = g_build_filename(cwd, "scripts/owl-backend.sh", NULL);
+  candidate = g_build_filename(cwd, "scripts/stellar-backend.sh", NULL);
   if (g_file_test(candidate, G_FILE_TEST_EXISTS)) {
     g_free(cwd);
     return candidate;
@@ -394,7 +394,7 @@ static char *resolve_backend_script(void) {
   char *exe_link = g_file_read_link("/proc/self/exe", NULL);
   if (exe_link != NULL) {
     char *exe_dir = g_path_get_dirname(exe_link);
-    candidate = g_build_filename(exe_dir, "../Resources/scripts/owl-backend.sh", NULL);
+    candidate = g_build_filename(exe_dir, "../Resources/scripts/stellar-backend.sh", NULL);
     g_free(exe_dir);
     g_free(exe_link);
     if (g_file_test(candidate, G_FILE_TEST_EXISTS)) {
@@ -405,7 +405,7 @@ static char *resolve_backend_script(void) {
 
   const char *home = g_get_home_dir();
   if (home != NULL) {
-    candidate = g_build_filename(home, "git/owl/scripts/owl-backend.sh", NULL);
+    candidate = g_build_filename(home, "git/stellar/scripts/stellar-backend.sh", NULL);
     if (g_file_test(candidate, G_FILE_TEST_EXISTS)) {
       return candidate;
     }
@@ -417,7 +417,7 @@ static char *resolve_backend_script(void) {
 static char *run_backend(AppContext *context, const char *action, const char *arg1, const char *arg2) {
   char *script_path = resolve_backend_script();
   if (script_path == NULL) {
-    return g_strdup("Owl backend script not found.");
+    return g_strdup("Stellar backend script not found.");
   }
 
   GPtrArray *argv = g_ptr_array_new();
@@ -614,7 +614,7 @@ static void populate_snapshot_lines(AppContext *context, const char *output) {
   g_strfreev(lines);
 
   if (!added_any) {
-    gtk_list_box_append(GTK_LIST_BOX(context->inbox_list), make_inbox_card("Owl", "simplex", "", "Backend snapshot is empty."));
+    gtk_list_box_append(GTK_LIST_BOX(context->inbox_list), make_inbox_card("Stellar", "simplex", "", "Backend snapshot is empty."));
   }
 }
 
@@ -622,7 +622,7 @@ static void refresh_from_backend(AppContext *context) {
   char *output = run_backend(context, "snapshot-lines", NULL, NULL);
   if (output != NULL && g_str_has_prefix(output, "root\t")) {
     populate_snapshot_lines(context, output);
-    set_status(context, "Loaded Owl snapshot.");
+    set_status(context, "Loaded Stellar snapshot.");
   } else {
     populate_seed_lists(context);
     set_status(context, output != NULL ? output : "Backend unavailable.");
@@ -766,7 +766,7 @@ static void setup_menus(GtkApplication *app) {
   GMenu *app_menu = g_menu_new();
   g_menu_append(app_menu, "Preferences", "app.open-settings");
   g_menu_append(app_menu, "Quit", "app.quit-app");
-  g_menu_append_submenu(menubar, "Owl", G_MENU_MODEL(app_menu));
+  g_menu_append_submenu(menubar, "Stellar", G_MENU_MODEL(app_menu));
 
   GMenu *view_menu = g_menu_new();
   g_menu_append(view_menu, "Inbox", "app.focus-inbox");
@@ -798,7 +798,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
   context->mail_root = default_mail_root();
 
   context->window = gtk_application_window_new(app);
-  gtk_window_set_title(GTK_WINDOW(context->window), "Owl");
+  gtk_window_set_title(GTK_WINDOW(context->window), "Stellar");
   gtk_window_set_default_size(GTK_WINDOW(context->window), 1120, 740);
 
   GtkWidget *header = gtk_header_bar_new();
@@ -839,7 +839,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
 }
 
 int main(int argc, char **argv) {
-  GtkApplication *app = gtk_application_new("app.owl", G_APPLICATION_DEFAULT_FLAGS);
+  GtkApplication *app = gtk_application_new("app.stellar", G_APPLICATION_DEFAULT_FLAGS);
   g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
   int status = g_application_run(G_APPLICATION(app), argc, argv);
   g_object_unref(app);

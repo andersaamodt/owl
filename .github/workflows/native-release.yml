@@ -44,26 +44,26 @@ jobs:
       - name: Package app bundle
         run: |
           set -eu
-          app_dir="dist/Owl.app"
+          app_dir="dist/Stellar.app"
           mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources/scripts"
-          cp generated/macos/.build/release/owl "$app_dir/Contents/MacOS/Owl"
-          cp scripts/owl-backend.sh "$app_dir/Contents/Resources/scripts/"
-          cp scripts/owl-simplex-local-hook.sh "$app_dir/Contents/Resources/scripts/"
-          cp scripts/owl-secure-chat-hook.sh "$app_dir/Contents/Resources/scripts/"
-          chmod +x "$app_dir/Contents/MacOS/Owl" "$app_dir"/Contents/Resources/scripts/*.sh
+          cp generated/macos/.build/release/stellar "$app_dir/Contents/MacOS/Stellar"
+          cp scripts/stellar-backend.sh "$app_dir/Contents/Resources/scripts/"
+          cp scripts/stellar-simplex-local-hook.sh "$app_dir/Contents/Resources/scripts/"
+          cp scripts/stellar-secure-chat-hook.sh "$app_dir/Contents/Resources/scripts/"
+          chmod +x "$app_dir/Contents/MacOS/Stellar" "$app_dir"/Contents/Resources/scripts/*.sh
           cat >"$app_dir/Contents/Info.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
             <key>CFBundleExecutable</key>
-            <string>Owl</string>
+            <string>Stellar</string>
             <key>CFBundleIdentifier</key>
-            <string>app.wizardry.owl</string>
+            <string>app.wizardry.stellar</string>
             <key>CFBundleName</key>
-            <string>Owl</string>
+            <string>Stellar</string>
             <key>CFBundleDisplayName</key>
-            <string>Owl</string>
+            <string>Stellar</string>
             <key>CFBundlePackageType</key>
             <string>APPL</string>
             <key>CFBundleShortVersionString</key>
@@ -76,11 +76,11 @@ jobs:
           </plist>
           PLIST
           codesign --force --deep --sign - "$app_dir"
-          ditto -c -k --sequesterRsrc --keepParent "$app_dir" dist/Owl-macOS.zip
+          ditto -c -k --sequesterRsrc --keepParent "$app_dir" dist/Stellar-macOS.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: Owl-macOS
-          path: dist/Owl-macOS.zip
+          name: Stellar-macOS
+          path: dist/Stellar-macOS.zip
 
   linux:
     name: Linux GTK
@@ -99,18 +99,18 @@ jobs:
       - name: Package Linux bundle
         run: |
           set -eu
-          bundle="dist/owl-linux-x86_64"
+          bundle="dist/stellar-linux-x86_64"
           mkdir -p "$bundle/scripts"
-          cp generated/linux/build/owl "$bundle/owl"
-          cp scripts/owl-backend.sh "$bundle/scripts/"
-          cp scripts/owl-simplex-local-hook.sh "$bundle/scripts/"
-          cp scripts/owl-secure-chat-hook.sh "$bundle/scripts/"
-          chmod +x "$bundle/owl" "$bundle"/scripts/*.sh
-          tar -czf dist/owl-linux-x86_64.tar.gz -C dist owl-linux-x86_64
+          cp generated/linux/build/stellar "$bundle/stellar"
+          cp scripts/stellar-backend.sh "$bundle/scripts/"
+          cp scripts/stellar-simplex-local-hook.sh "$bundle/scripts/"
+          cp scripts/stellar-secure-chat-hook.sh "$bundle/scripts/"
+          chmod +x "$bundle/stellar" "$bundle"/scripts/*.sh
+          tar -czf dist/stellar-linux-x86_64.tar.gz -C dist stellar-linux-x86_64
       - uses: actions/upload-artifact@v4
         with:
-          name: owl-linux-x86_64
-          path: dist/owl-linux-x86_64.tar.gz
+          name: stellar-linux-x86_64
+          path: dist/stellar-linux-x86_64.tar.gz
 
   android:
     name: Android APK/AAB
@@ -128,10 +128,10 @@ jobs:
       - name: Install Android SDK packages
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - name: Generate mobile targets
-        working-directory: owl-mobile
+        working-directory: stellar-mobile
         run: sh scripts/render-native-mobile.sh
       - name: Build APK and release bundle
-        working-directory: owl-mobile/generated/mobile/android
+        working-directory: stellar-mobile/generated/mobile/android
         env:
           ANDROID_SIGNING_KEYSTORE_BASE64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}
           ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
@@ -140,12 +140,12 @@ jobs:
         run: gradle --no-daemon assembleDebug bundleRelease
       - uses: actions/upload-artifact@v4
         with:
-          name: owl-android-debug-apk
-          path: owl-mobile/generated/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          name: stellar-android-debug-apk
+          path: stellar-mobile/generated/mobile/android/app/build/outputs/apk/debug/app-debug.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: owl-android-release-aab
-          path: owl-mobile/generated/mobile/android/app/build/outputs/bundle/release/app-release.aab
+          name: stellar-android-release-aab
+          path: stellar-mobile/generated/mobile/android/app/build/outputs/bundle/release/app-release.aab
 
   play-upload:
     name: Google Play Draft Upload
@@ -155,12 +155,12 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: owl-android-release-aab
+          name: stellar-android-release-aab
           path: play
       - uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-          packageName: app.wizardry.owl
+          packageName: app.wizardry.stellar
           releaseFiles: play/app-release.aab
           track: internal
           status: draft
@@ -173,45 +173,45 @@ jobs:
       - name: Install tools
         run: brew install jq xcodegen
       - name: Generate mobile targets
-        working-directory: owl-mobile
+        working-directory: stellar-mobile
         run: sh scripts/render-native-mobile.sh
       - name: Generate Xcode project
-        working-directory: owl-mobile/generated/mobile/ios
+        working-directory: stellar-mobile/generated/mobile/ios
         run: xcodegen generate --spec project.yml
       - name: Validate Xcode project
-        working-directory: owl-mobile/generated/mobile/ios
+        working-directory: stellar-mobile/generated/mobile/ios
         run: |
           set -eu
-          xcodebuild -list -project owl-mobile.xcodeproj
+          xcodebuild -list -project stellar-mobile.xcodeproj
       - name: Build unsigned simulator app
-        working-directory: owl-mobile/generated/mobile/ios
+        working-directory: stellar-mobile/generated/mobile/ios
         run: |
           set -eu
           xcodebuild \
-            -project owl-mobile.xcodeproj \
-            -scheme owl \
+            -project stellar-mobile.xcodeproj \
+            -scheme stellar \
             -configuration Release \
             -sdk iphonesimulator \
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             build
       - name: Package generated iOS project
-        working-directory: owl-mobile/generated/mobile/ios
+        working-directory: stellar-mobile/generated/mobile/ios
         run: |
           set -eu
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          ditto -c -k --keepParent owl-mobile.xcodeproj "$GITHUB_WORKSPACE/dist/owl-ios-project.zip"
+          ditto -c -k --keepParent stellar-mobile.xcodeproj "$GITHUB_WORKSPACE/dist/stellar-ios-project.zip"
           app_path=$(find build/DerivedData/Build/Products/Release-iphonesimulator -maxdepth 1 -type d -name '*.app' | head -n 1)
           [ -n "$app_path" ]
-          ditto -c -k --keepParent "$app_path" "$GITHUB_WORKSPACE/dist/owl-ios-simulator-app.zip"
+          ditto -c -k --keepParent "$app_path" "$GITHUB_WORKSPACE/dist/stellar-ios-simulator-app.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: owl-ios-project
-          path: dist/owl-ios-project.zip
+          name: stellar-ios-project
+          path: dist/stellar-ios-project.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: owl-ios-simulator-app
-          path: dist/owl-ios-simulator-app.zip
+          name: stellar-ios-simulator-app
+          path: dist/stellar-ios-simulator-app.zip
 
   github-release:
     name: Attach Release Artifacts

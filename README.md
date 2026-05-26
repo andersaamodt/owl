@@ -1,15 +1,15 @@
-# Owl
+# Stellar
 
-Owl is a native mail and messaging app for people who want email and secure
+Stellar is a native mail and messaging app for people who want email and secure
 chat in one calm timeline. It keeps your conversations arranged by person or
 group, shows which transport each message used, and makes email an explicit
 choice instead of an invisible fallback.
 
-Owl is early software. The repository currently builds native macOS, Linux,
+Stellar is early software. The repository currently builds native macOS, Linux,
 Android, and iOS targets, with Android direct distribution as the simplest
 mobile path.
 
-## What Owl Does
+## What Stellar Does
 
 - Shows email and SimpleX-style secure messages in the same contact timeline.
 - Keeps Inbox, People, Groups, Favorites, Archive, and New Senders as first-class
@@ -21,14 +21,14 @@ mobile path.
 - Includes remote mail server setup flows for provisioning, verifying, syncing,
   and sending a test message against an SSH target.
 
-## Getting Owl
+## Getting Stellar
 
 Release builds are produced by GitHub Actions and attached to tagged
-[GitHub releases](https://github.com/andersaamodt/owl/releases):
+[GitHub releases](https://github.com/andersaamodt/stellar/releases):
 
-- macOS: `Owl-macOS`
-- Linux: `owl-linux-x86_64`
-- Android: `owl-android-debug-apk` for sideloading, plus a release AAB
+- macOS: `Stellar-macOS`
+- Linux: `stellar-linux-x86_64`
+- Android: `stellar-android-debug-apk` for sideloading, plus a release AAB
 - iOS: generated Xcode project and unsigned simulator app
 
 Android is direct-distribution first and does not require Google Play Services.
@@ -37,24 +37,24 @@ hoc, enterprise, or another signed distribution path.
 
 ## Data and Transports
 
-Owl defaults to `~/mail` and keeps SimpleX-related files under:
+Stellar defaults to `~/mail` and keeps SimpleX-related files under:
 
 ```text
-~/mail/.owl/simplex/
+~/mail/.stellar/simplex/
 ~/mail/.system/simplex/
 ~/mail/.transport/simplex/
 ```
 
-The local SimpleX hook is `scripts/owl-simplex-local-hook.sh`. Owl can also sync
+The local SimpleX hook is `scripts/stellar-simplex-local-hook.sh`. Stellar can also sync
 with a remote Secure Chat daemon over SSH through
-`scripts/owl-secure-chat-hook.sh`; hosts and remote commands must be configured
+`scripts/stellar-secure-chat-hook.sh`; hosts and remote commands must be configured
 explicitly and are not baked into the repository.
 
 ## For Developers
 
-Owl is not a WebView app. The desktop UI is generated from
-`app-blueprint/app.ir.yaml`; the mobile workspace is in `owl-mobile` and is generated from
-`owl-mobile/app-blueprint/mobile.ir.yaml`.
+Stellar is not a WebView app. The desktop UI is generated from
+`app-blueprint/app.ir.yaml`; the mobile workspace is in `stellar-mobile` and is generated from
+`stellar-mobile/app-blueprint/mobile.ir.yaml`.
 
 Generate and validate desktop targets:
 
@@ -66,7 +66,7 @@ sh scripts/validate-native-desktop-ir.sh
 Generate and validate mobile targets:
 
 ```sh
-cd owl-mobile
+cd stellar-mobile
 sh scripts/render-native-mobile.sh
 sh scripts/validate-native-mobile-ir.sh
 ```
@@ -83,5 +83,5 @@ details.
 
 ## License
 
-Owl is dual-licensed under `OWL 3.1 OR AGPL-3.0-or-later`. AGPL use includes
+Stellar is dual-licensed under `OWL 3.1 OR AGPL-3.0-or-later`. AGPL use includes
 the additional terms in `WIZARDRY_ADDENDUM.md`.

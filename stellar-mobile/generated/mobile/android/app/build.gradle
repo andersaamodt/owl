@@ -1,0 +1,49 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'app.wizardry.stellar'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'app.wizardry.stellar'
+        minSdk 23
+        targetSdk 35
+        versionCode 1001
+        versionName '0.1.1'
+    }
+
+    def signingStorePath = System.getenv('ANDROID_SIGNING_KEYSTORE')
+    def signingStoreBase64 = System.getenv('ANDROID_SIGNING_KEYSTORE_BASE64')
+    if (signingStoreBase64 != null && signingStoreBase64.trim()) {
+        def decodedStore = layout.buildDirectory.file('ci-release.keystore').get().asFile
+        decodedStore.parentFile.mkdirs()
+        decodedStore.bytes = signingStoreBase64.decodeBase64()
+        signingStorePath = decodedStore.absolutePath
+    }
+    def signingStorePassword = System.getenv('ANDROID_SIGNING_STORE_PASSWORD')
+    def signingKeyAlias = System.getenv('ANDROID_SIGNING_KEY_ALIAS')
+    def signingKeyPassword = System.getenv('ANDROID_SIGNING_KEY_PASSWORD')
+    def hasReleaseSigning = signingStorePath != null && signingStorePath.trim() &&
+        signingStorePassword != null && signingStorePassword.trim() &&
+        signingKeyAlias != null && signingKeyAlias.trim() &&
+        signingKeyPassword != null && signingKeyPassword.trim()
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(signingStorePath)
+                storePassword signingStorePassword
+                keyAlias signingKeyAlias
+                keyPassword signingKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+}

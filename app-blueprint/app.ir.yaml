@@ -2,8 +2,8 @@
   "version": "native-desktop-ir/v1",
   "format": "yaml-1.2-json-compatible",
   "app": {
-    "id": "owl",
-    "name": "Owl",
+    "id": "stellar",
+    "name": "Stellar",
     "targets": ["macos", "linux"],
     "actions": [
       {"id": "focus_new", "title": "New Senders"},
@@ -38,7 +38,7 @@
       "id": "window.main",
       "name": "mainWindow",
       "type": "Window",
-      "title": "Owl",
+      "title": "Stellar",
       "width": 128,
       "minWidth": 96,
       "height": 82,
@@ -50,7 +50,7 @@
           {
             "id": "menu.app",
             "type": "Menu",
-            "title": "Owl",
+            "title": "Stellar",
             "children": [
               {"id": "menuitem.settings", "type": "MenuItem", "title": "Settings", "action": "open_settings", "shortcut": "cmd+,"},
               {"id": "menuitem.quit", "type": "MenuItem", "title": "Quit", "action": "quit_app", "shortcut": "cmd+q"}

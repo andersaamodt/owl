@@ -4,7 +4,7 @@ set -eu
 
 test_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
 repo_dir=$(CDPATH= cd -- "$test_dir/../.." && pwd -P)
-tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/owl-ir-test.XXXXXX")
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/stellar-ir-test.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
 
 failures=0

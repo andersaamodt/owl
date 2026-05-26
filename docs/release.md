@@ -1,16 +1,16 @@
-# Owl Release Notes
+# Stellar Release Notes
 
-Owl builds desktop and mobile native targets from repository-owned IR:
+Stellar builds desktop and mobile native targets from repository-owned IR:
 
 - Desktop IR: `app-blueprint/app.ir.yaml`
-- Mobile IR: `owl-mobile/app-blueprint/mobile.ir.yaml`
+- Mobile IR: `stellar-mobile/app-blueprint/mobile.ir.yaml`
 
 GitHub Actions builds all release targets in `.github/workflows/native-release.yml`.
 
 ## Android
 
 The Android app is direct-distribution first. The workflow always uploads
-`owl-android-debug-apk`, which contains `app-debug.apk`; that APK can be
+`stellar-android-debug-apk`, which contains `app-debug.apk`; that APK can be
 downloaded from a GitHub Actions run and sideloaded on Android after enabling
 installation from the browser or file manager used to open it.
 
@@ -27,12 +27,12 @@ upload is manual and optional through the workflow dispatch input
 ## iOS
 
 The workflow generates the iOS Xcode project, builds an unsigned simulator app,
-and uploads both `owl-ios-project` and `owl-ios-simulator-app`. A directly
+and uploads both `stellar-ios-project` and `stellar-ios-simulator-app`. A directly
 installable iPhone build still requires Apple signing material and an Apple
 distribution path such as TestFlight, ad hoc, or enterprise signing; there is no
 Android-style unsigned APK equivalent for ordinary iPhones.
 
 ## License
 
-Owl is dual-licensed under `OWL 3.1 OR AGPL-3.0-or-later`. AGPL use includes
+Stellar is dual-licensed under `OWL 3.1 OR AGPL-3.0-or-later`. AGPL use includes
 the additional terms in `WIZARDRY_ADDENDUM.md`.

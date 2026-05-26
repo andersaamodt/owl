@@ -1,4 +1,4 @@
-One Owl license option is the GNU Affero General Public License, version 3 or
+One Stellar license option is the GNU Affero General Public License, version 3 or
 (at your option) any later version, with the additional terms in
 WIZARDRY_ADDENDUM.md.
 

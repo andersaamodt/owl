@@ -4,7 +4,7 @@ set -eu
 
 test_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
 repo_dir=$(CDPATH= cd -- "$test_dir/../.." && pwd -P)
-tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/owl-backend-test.XXXXXX")
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/stellar-backend-test.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
 
 failures=0
@@ -24,17 +24,17 @@ backend() {
   HOME="$tmpdir/home" \
   XDG_STATE_HOME="$tmpdir/state" \
   XDG_CONFIG_HOME="$tmpdir/config" \
-  sh "$repo_dir/scripts/owl-backend.sh" "$@"
+  sh "$repo_dir/scripts/stellar-backend.sh" "$@"
 }
 
-backend_with_owl() {
-  owl_backend=$1
+backend_with_stellar() {
+  stellar_backend=$1
   shift
   HOME="$tmpdir/home" \
   XDG_STATE_HOME="$tmpdir/state" \
   XDG_CONFIG_HOME="$tmpdir/config" \
-  OWL_DESKTOP_BACKEND="$owl_backend" \
-  sh "$repo_dir/scripts/owl-backend.sh" "$@"
+  STELLAR_DESKTOP_BACKEND="$stellar_backend" \
+  sh "$repo_dir/scripts/stellar-backend.sh" "$@"
 }
 
 b64() {
@@ -51,7 +51,7 @@ SH
   chmod +x "$binary"
 }
 
-write_fake_owl_backend() {
+write_fake_stellar_backend() {
   script=$1
   cat >"$script" <<'SH'
 #!/bin/sh
@@ -117,9 +117,9 @@ prepare_creates_shared_roots() {
   backend prepare "$root" >/dev/null
   [ -d "$root/accepted" ] &&
     [ -d "$root/archive" ] &&
-    [ -d "$root/.owl/simplex/threads" ] &&
-    [ -d "$root/.owl/simplex/incoming" ] &&
-    [ -d "$root/.owl/simplex/outbox" ]
+    [ -d "$root/.stellar/simplex/threads" ] &&
+    [ -d "$root/.stellar/simplex/incoming" ] &&
+    [ -d "$root/.stellar/simplex/outbox" ]
 }
 
 simplex_messages_share_one_timeline_and_inbox() {
@@ -221,13 +221,13 @@ EOF
     '.ok == true and .install_state == "installed" and .install_source == "wizardry" and .version == "vtest" and .binary_path == $binary' >/dev/null
 }
 
-snapshot_includes_owl_mailboxes_drafts_events_settings() {
+snapshot_includes_stellar_mailboxes_drafts_events_settings() {
   root="$tmpdir/snapshot-mail/mail"
-  fake="$tmpdir/fake-owl-backend.sh"
+  fake="$tmpdir/fake-stellar-backend.sh"
   mkdir -p "$tmpdir/home"
-  write_fake_owl_backend "$fake"
-  backend_with_owl "$fake" prepare "$root" >/dev/null
-  snapshot=$(backend_with_owl "$fake" snapshot "$root")
+  write_fake_stellar_backend "$fake"
+  backend_with_stellar "$fake" prepare "$root" >/dev/null
+  snapshot=$(backend_with_stellar "$fake" snapshot "$root")
   printf '%s\n' "$snapshot" | jq -e '
     .ok == true and
     ([.mailboxes[] | select(.id == "accepted")][0].count == 1) and
@@ -274,30 +274,30 @@ YAML
 
 snapshot_lines_exposes_native_gtk_feed() {
   root="$tmpdir/snapshot-lines/mail"
-  fake="$tmpdir/fake-owl-lines.sh"
+  fake="$tmpdir/fake-stellar-lines.sh"
   mkdir -p "$tmpdir/home"
-  write_fake_owl_backend "$fake"
-  backend_with_owl "$fake" prepare "$root" >/dev/null
-  lines=$(backend_with_owl "$fake" snapshot-lines "$root")
+  write_fake_stellar_backend "$fake"
+  backend_with_stellar "$fake" prepare "$root" >/dev/null
+  lines=$(backend_with_stellar "$fake" snapshot-lines "$root")
   printf '%s\n' "$lines" | grep -q '^mailbox	accepted	Accepted	1	1$' &&
     printf '%s\n' "$lines" | grep -q '^inbox	.*	Alice	email	Hello	Email preview	2026-04-20T10:00:00Z$' &&
     printf '%s\n' "$lines" | grep -q '^draft	draft-1	alice@example.org	Draft note'
 }
 
-owl_actions_are_hard_allowlisted_and_passthrough() {
+stellar_actions_are_hard_allowlisted_and_passthrough() {
   root="$tmpdir/passthrough/mail"
-  fake="$tmpdir/fake-owl-passthrough.sh"
+  fake="$tmpdir/fake-stellar-passthrough.sh"
   mkdir -p "$tmpdir/home"
-  write_fake_owl_backend "$fake"
-  output=$(backend_with_owl "$fake" settings-set-domain "$root" example.org)
+  write_fake_stellar_backend "$fake"
+  output=$(backend_with_stellar "$fake" settings-set-domain "$root" example.org)
   printf '%s\n' "$output" | jq -e '.ok == true and .domain == "example.org"' >/dev/null
-  output=$(backend_with_owl "$fake" settings-remote-set-auth "$root" 1 0 "secret" user@example.org "$tmpdir/id_ed25519" 2222)
+  output=$(backend_with_stellar "$fake" settings-remote-set-auth "$root" 1 0 "secret" user@example.org "$tmpdir/id_ed25519" 2222)
   printf '%s\n' "$output" | jq -e '.ok == true and .action == "settings-remote-set-auth" and .argc == 6' >/dev/null
-  output=$(backend_with_owl "$fake" settings-remote-deploy "$root" user@example.org "$tmpdir/id_ed25519" "secret" 2222)
+  output=$(backend_with_stellar "$fake" settings-remote-deploy "$root" user@example.org "$tmpdir/id_ed25519" "secret" 2222)
   printf '%s\n' "$output" | jq -e '.ok == true and .action == "settings-remote-deploy" and .argc == 4' >/dev/null
-  output=$(backend_with_owl "$fake" settings-remote-send-test "$root" user@example.org "$tmpdir/id_ed25519" "secret" 2222)
+  output=$(backend_with_stellar "$fake" settings-remote-send-test "$root" user@example.org "$tmpdir/id_ed25519" "secret" 2222)
   printf '%s\n' "$output" | jq -e '.ok == true and .action == "settings-remote-send-test" and .argc == 4' >/dev/null
-  if backend_with_owl "$fake" arbitrary-shell "$root" >"$tmpdir/arbitrary.out" 2>"$tmpdir/arbitrary.err"; then
+  if backend_with_stellar "$fake" arbitrary-shell "$root" >"$tmpdir/arbitrary.out" 2>"$tmpdir/arbitrary.err"; then
     return 1
   fi
   grep -q 'unsupported action' "$tmpdir/arbitrary.err"
@@ -313,21 +313,21 @@ ui_prefs_are_plaintext_xdg_state() {
   backend set-ui-pref "$root" selected_route "thread:alice" >/dev/null
   output=$(backend get-ui-prefs "$root")
   printf '%s\n' "$output" | jq -e --arg root "$next_root" '.mail_root == $root and .selected_route == "thread:alice"' >/dev/null
-  grep -q "mail_root=$next_root" "$tmpdir/config/wizardry-apps/owl/prefs.conf"
+  grep -q "mail_root=$next_root" "$tmpdir/config/wizardry-apps/stellar/prefs.conf"
 }
 
 message_detail_returns_simplex_and_email_messages() {
   root="$tmpdir/detail/mail"
-  fake="$tmpdir/fake-owl-detail.sh"
+  fake="$tmpdir/fake-stellar-detail.sh"
   mkdir -p "$tmpdir/home"
-  write_fake_owl_backend "$fake"
-  backend_with_owl "$fake" prepare "$root" >/dev/null
-  backend_with_owl "$fake" bind-contact "$root" alice "Alice Ledger" person alice@example.org simplex://alice yes >/dev/null
-  backend_with_owl "$fake" import-simplex "$root" alice "$(b64 'Encrypted detail')" false true "SimpleX detail" >/dev/null
-  simplex_id=$(backend_with_owl "$fake" snapshot "$root" | jq -r '.inbox[] | select(.transport == "simplex") | .id' | head -n 1)
-  email_id=$(backend_with_owl "$fake" snapshot "$root" | jq -r '.inbox[] | select(.transport == "email") | .id' | head -n 1)
-  backend_with_owl "$fake" message-detail "$root" "$simplex_id" | jq -e '.ok == true and .transport == "simplex" and .body == "Encrypted detail"' >/dev/null
-  backend_with_owl "$fake" get-message "$root" "$email_id" | jq -e '.ok == true and .transport == "email" and .body == "Full fake body"' >/dev/null
+  write_fake_stellar_backend "$fake"
+  backend_with_stellar "$fake" prepare "$root" >/dev/null
+  backend_with_stellar "$fake" bind-contact "$root" alice "Alice Ledger" person alice@example.org simplex://alice yes >/dev/null
+  backend_with_stellar "$fake" import-simplex "$root" alice "$(b64 'Encrypted detail')" false true "SimpleX detail" >/dev/null
+  simplex_id=$(backend_with_stellar "$fake" snapshot "$root" | jq -r '.inbox[] | select(.transport == "simplex") | .id' | head -n 1)
+  email_id=$(backend_with_stellar "$fake" snapshot "$root" | jq -r '.inbox[] | select(.transport == "email") | .id' | head -n 1)
+  backend_with_stellar "$fake" message-detail "$root" "$simplex_id" | jq -e '.ok == true and .transport == "simplex" and .body == "Encrypted detail"' >/dev/null
+  backend_with_stellar "$fake" get-message "$root" "$email_id" | jq -e '.ok == true and .transport == "email" and .body == "Full fake body"' >/dev/null
 }
 
 simplex_tick_uses_transport_hook_for_poll_and_send() {
@@ -448,7 +448,7 @@ bundled_simplex_local_transport_is_end_to_end() {
   mkdir -p "$tmpdir/home"
   backend prepare "$root" >/dev/null
   backend bind-contact "$root" dana "Dana Local" person dana@example.org simplex://dana yes >/dev/null
-  backend configure-simplex-local-transport "$root" default | jq -e '.hook_ready == true and (.hook_path | endswith("owl-simplex-local-hook.sh"))' >/dev/null
+  backend configure-simplex-local-transport "$root" default | jq -e '.hook_ready == true and (.hook_path | endswith("stellar-simplex-local-hook.sh"))' >/dev/null
   backend bootstrap-status "$root" default | jq -e '.hook_ready == true and (.hook_path | length > 0)' >/dev/null
   backend send-message "$root" dana simplex "Local outbound" "$(b64 'local outbound body')" >/dev/null
   mkdir -p "$wire_in"
@@ -456,7 +456,7 @@ bundled_simplex_local_transport_is_end_to_end() {
   tick=$(backend tick-simplex "$root" default)
   printf '%s\n' "$tick" | jq -e '.ok == true and .imported == 1 and .outbox.sent == 1 and .outbox.waiting == 0 and .outbox.failed == 0' >/dev/null
   [ -n "$(find "$root/.transport/simplex/default/local-wire/sent" -type f -name '*.json' -print -quit 2>/dev/null)" ] || return 1
-  [ -z "$(find "$root/.owl/simplex/outbox" -type f -name '*.json' -print -quit 2>/dev/null)" ] || return 1
+  [ -z "$(find "$root/.stellar/simplex/outbox" -type f -name '*.json' -print -quit 2>/dev/null)" ] || return 1
   snapshot=$(backend snapshot "$root")
   printf '%s\n' "$snapshot" | jq -e '
     ([.threads[] | select(.id == "dana")][0].messages | map(select(.body == "local outbound body" and .status == "sent")) | length) == 1 and
@@ -483,9 +483,9 @@ shift || true
 arg1=${1-}
 arg2=${2-}
 arg5=${5-}
-printf '%s\t%s\t%s\t%s\t%s\n' "$host" "$cmd" "$arg1" "$arg2" "$arg5" >>"${OWL_TEST_SSH_LOG:?}"
+printf '%s\t%s\t%s\t%s\t%s\n' "$host" "$cmd" "$arg1" "$arg2" "$arg5" >>"${STELLAR_TEST_SSH_LOG:?}"
 case "$cmd" in
-  */blog-secure-chat-owl-export)
+  */blog-secure-chat-stellar-export)
     if [ "$arg1" = "9" ]; then
       jq -n '{success:true,cursor_seq:9,messages:[]}'
       exit 0
@@ -541,10 +541,10 @@ case "$cmd" in
       }]
     }'
     ;;
-  */blog-secure-chat-owl-send)
+  */blog-secure-chat-stellar-send)
     [ "$arg1" = "secure-chat:27" ] || exit 1
-    printf '%s\n' "$arg2" | base64 -d >>"${OWL_TEST_SSH_LOG:?}.decoded"
-    printf '\n' >>"${OWL_TEST_SSH_LOG:?}.decoded"
+    printf '%s\n' "$arg2" | base64 -d >>"${STELLAR_TEST_SSH_LOG:?}.decoded"
+    printf '\n' >>"${STELLAR_TEST_SSH_LOG:?}.decoded"
     jq -n '{success:true,npub:"npub1visitor"}'
     ;;
   *)
@@ -554,14 +554,14 @@ esac
 SH
   chmod +x "$fakebin/ssh"
   backend prepare "$root" >/dev/null
-  backend configure-secure-chat-transport "$root" default test-host /remote/blog-secure-chat-owl-export /remote/blog-secure-chat-owl-send | jq -e '.hook_ready == true and .secure_chat_ssh_host == "test-host"' >/dev/null
+  backend configure-secure-chat-transport "$root" default test-host /remote/blog-secure-chat-stellar-export /remote/blog-secure-chat-stellar-send | jq -e '.hook_ready == true and .secure_chat_ssh_host == "test-host"' >/dev/null
   tick=$(
     PATH="$fakebin:$PATH" \
-    OWL_TEST_SSH_LOG="$ssh_log" \
+    STELLAR_TEST_SSH_LOG="$ssh_log" \
     HOME="$tmpdir/home" \
     XDG_STATE_HOME="$tmpdir/state" \
     XDG_CONFIG_HOME="$tmpdir/config" \
-    sh "$repo_dir/scripts/owl-backend.sh" tick-simplex "$root" default
+    sh "$repo_dir/scripts/stellar-backend.sh" tick-simplex "$root" default
   )
   printf '%s\n' "$tick" | jq -e '.ok == true and .imported == 1 and .outbox.failed == 0' >/dev/null
   snapshot=$(backend snapshot "$root")
@@ -574,11 +574,11 @@ SH
   backend bind-contact "$root" secure-chat-contact-27 "Legacy Contact" person "" secure-chat:27 no >/dev/null
   backend import-simplex "$root" secure-chat-contact-27 "$(b64 'legacy duplicate thread')" false true "Website Secure Chat" >/dev/null
   PATH="$fakebin:$PATH" \
-    OWL_TEST_SSH_LOG="$ssh_log" \
+    STELLAR_TEST_SSH_LOG="$ssh_log" \
     HOME="$tmpdir/home" \
     XDG_STATE_HOME="$tmpdir/state" \
     XDG_CONFIG_HOME="$tmpdir/config" \
-    sh "$repo_dir/scripts/owl-backend.sh" tick-simplex "$root" default >/dev/null
+    sh "$repo_dir/scripts/stellar-backend.sh" tick-simplex "$root" default >/dev/null
   snapshot=$(backend snapshot "$root")
   printf '%s\n' "$snapshot" | jq -e '
     ([.threads[] | select(.id == "npub1visitor")] | length) == 1 and
@@ -589,23 +589,23 @@ SH
   ' >/dev/null
   backend send-message "$root" npub1visitor simplex "Reply" "$(b64 'reply body 😀')" >/dev/null
   PATH="$fakebin:$PATH" \
-    OWL_TEST_SSH_LOG="$ssh_log" \
+    STELLAR_TEST_SSH_LOG="$ssh_log" \
     HOME="$tmpdir/home" \
     XDG_STATE_HOME="$tmpdir/state" \
     XDG_CONFIG_HOME="$tmpdir/config" \
-    sh "$repo_dir/scripts/owl-backend.sh" tick-simplex "$root" default >/dev/null
-  grep -q '/remote/blog-secure-chat-owl-send	secure-chat:27' "$ssh_log"
+    sh "$repo_dir/scripts/stellar-backend.sh" tick-simplex "$root" default >/dev/null
+  grep -q '/remote/blog-secure-chat-stellar-send	secure-chat:27' "$ssh_log"
   grep -q 'simplex:' "$ssh_log"
   grep -q 'reply body 😀' "$ssh_log.decoded"
   attachment_file="$tmpdir/secure-chat-hook/probe.txt"
   printf '%s\n' 'attachment payload 😀' >"$attachment_file"
   backend send-attachment "$root" npub1visitor simplex "Attachment" "$(b64 'attachment reply 😀')" "$attachment_file" >/dev/null
   PATH="$fakebin:$PATH" \
-    OWL_TEST_SSH_LOG="$ssh_log" \
+    STELLAR_TEST_SSH_LOG="$ssh_log" \
     HOME="$tmpdir/home" \
     XDG_STATE_HOME="$tmpdir/state" \
     XDG_CONFIG_HOME="$tmpdir/config" \
-  sh "$repo_dir/scripts/owl-backend.sh" tick-simplex "$root" default >/dev/null
+  sh "$repo_dir/scripts/stellar-backend.sh" tick-simplex "$root" default >/dev/null
   grep -q 'attachment reply 😀' "$ssh_log.decoded"
   snapshot=$(backend snapshot "$root")
   printf '%s\n' "$snapshot" | jq -e '
@@ -619,13 +619,13 @@ stale_bundled_secure_chat_hook_path_resolves_to_current_hook() {
   conf="$root/.transport/simplex/default/profile.conf"
   mkdir -p "$(dirname "$conf")"
   {
-    printf '%s\n' 'transport_hook=/Users/example/git/owl-native/scripts/owl-native-secure-chat-hook.sh'
+    printf '%s\n' 'transport_hook=/Users/example/git/stellar-native/scripts/stellar-native-secure-chat-hook.sh'
     printf '%s\n' 'secure_chat_ssh_host=test-host'
-    printf '%s\n' 'secure_chat_export_command=/remote/blog-secure-chat-owl-export'
-    printf '%s\n' 'secure_chat_send_command=/remote/blog-secure-chat-owl-send'
+    printf '%s\n' 'secure_chat_export_command=/remote/blog-secure-chat-stellar-export'
+    printf '%s\n' 'secure_chat_send_command=/remote/blog-secure-chat-stellar-send'
   } >"$conf"
   backend simplex-transport-status "$root" default | jq -e \
-    --arg hook "$repo_dir/scripts/owl-secure-chat-hook.sh" \
+    --arg hook "$repo_dir/scripts/stellar-secure-chat-hook.sh" \
     '.hook_ready == true and .hook_path == $hook' >/dev/null
 }
 
@@ -659,8 +659,8 @@ SH
     HOME="$tmpdir/home" \
     XDG_STATE_HOME="$tmpdir/state" \
     XDG_CONFIG_HOME="$tmpdir/config" \
-    OWL_SIMPLEX_INSTALLER="$installer" \
-    sh "$repo_dir/scripts/owl-backend.sh" install-simplex-cli "$root"
+    STELLAR_SIMPLEX_INSTALLER="$installer" \
+    sh "$repo_dir/scripts/stellar-backend.sh" install-simplex-cli "$root"
   )
   printf '%s\n' "$output" | jq -e \
     --arg binary "$tmpdir/state/wizardry/simplex/current/simplex-chat" \
@@ -684,10 +684,10 @@ run_case "SimpleX inbox state does not move timeline messages" simplex_inbox_sta
 run_case "SimpleX trash stages a file for system Trash" simplex_trash_stages_file_for_system_trash
 run_case "bootstrap status is structured" bootstrap_status_is_structured
 run_case "bootstrap status detects Wizardry SimpleX install" bootstrap_status_detects_wizardry_simplex_install
-run_case "snapshot includes Owl mailboxes, drafts, events, and settings" snapshot_includes_owl_mailboxes_drafts_events_settings
+run_case "snapshot includes Stellar mailboxes, drafts, events, and settings" snapshot_includes_stellar_mailboxes_drafts_events_settings
 run_case "snapshot reads mail sidecars locally" snapshot_reads_mail_sidecars_locally
 run_case "snapshot lines exposes native GTK feed" snapshot_lines_exposes_native_gtk_feed
-run_case "Owl actions are hard allowlisted and pass through" owl_actions_are_hard_allowlisted_and_passthrough
+run_case "Stellar actions are hard allowlisted and pass through" stellar_actions_are_hard_allowlisted_and_passthrough
 run_case "UI prefs are plaintext XDG state" ui_prefs_are_plaintext_xdg_state
 run_case "message detail returns SimpleX and email messages" message_detail_returns_simplex_and_email_messages
 run_case "SimpleX tick uses transport hook for poll and send" simplex_tick_uses_transport_hook_for_poll_and_send

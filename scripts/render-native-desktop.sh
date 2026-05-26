@@ -28,10 +28,10 @@ linux_ir_literal=$(printf '%s\n' "$pretty_ir" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^
 
 mkdir -p "$macos_dir/Sources/App" "$linux_dir/src"
 
-actions_tmp=$(mktemp "${TMPDIR:-/tmp}/owl-actions.XXXXXX")
-swift_cases_tmp=$(mktemp "${TMPDIR:-/tmp}/owl-swift-actions.XXXXXX")
-linux_setup_tmp=$(mktemp "${TMPDIR:-/tmp}/owl-linux-actions.XXXXXX")
-linux_handlers_tmp=$(mktemp "${TMPDIR:-/tmp}/owl-linux-handlers.XXXXXX")
+actions_tmp=$(mktemp "${TMPDIR:-/tmp}/stellar-actions.XXXXXX")
+swift_cases_tmp=$(mktemp "${TMPDIR:-/tmp}/stellar-swift-actions.XXXXXX")
+linux_setup_tmp=$(mktemp "${TMPDIR:-/tmp}/stellar-linux-actions.XXXXXX")
+linux_handlers_tmp=$(mktemp "${TMPDIR:-/tmp}/stellar-linux-handlers.XXXXXX")
 trap 'rm -f "$actions_tmp" "$swift_cases_tmp" "$linux_setup_tmp" "$linux_handlers_tmp"' EXIT HUP INT TERM
 
 jq -r '.app.actions[].id' "$ir_path" >"$actions_tmp"
@@ -81,7 +81,7 @@ render_template_file() {
   template_path=$1
   output_path=$2
   mkdir -p "$(dirname "$output_path")"
-  output_tmp=$(mktemp "${TMPDIR:-/tmp}/owl-render.XXXXXX")
+  output_tmp=$(mktemp "${TMPDIR:-/tmp}/stellar-render.XXXXXX")
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       "__CANONICAL_IR__")

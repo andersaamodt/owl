@@ -1,0 +1,127 @@
+{
+  "version": "native-mobile-ir/v1",
+  "format": "yaml-1.2-json-compatible",
+  "app": {
+    "id": "stellar",
+    "name": "Stellar",
+    "targets": ["android", "ios"],
+    "android": {
+      "applicationId": "app.wizardry.stellar",
+      "compileSdk": 35,
+      "minSdk": 23,
+      "targetSdk": 35
+    },
+    "ios": {
+      "bundleId": "app.wizardry.stellar",
+      "deploymentTarget": "16.0"
+    },
+    "offlineFirst": true,
+    "storePolicy": "direct-first",
+    "permissions": ["network", "notifications", "files"],
+    "actions": [
+      {"id": "open_inbox", "title": "Inbox"},
+      {"id": "open_people", "title": "People"},
+      {"id": "open_groups", "title": "Groups"},
+      {"id": "open_settings", "title": "Settings"},
+      {"id": "compose_simplex", "title": "Use SimpleX"},
+      {"id": "compose_email", "title": "Use Email"},
+      {"id": "send_message", "title": "Send"},
+      {"id": "sync_now", "title": "Sync"},
+      {"id": "save_remote_bridge", "title": "Save Backend Bridge"},
+      {"id": "save_remote_target", "title": "Save Remote Target"},
+      {"id": "save_remote_auth", "title": "Save Remote Auth"},
+      {"id": "deploy_remote_server", "title": "Deploy Remote Server"},
+      {"id": "verify_remote_server", "title": "Verify Remote Setup"},
+      {"id": "setup_remote_tls", "title": "Set Up Remote TLS"},
+      {"id": "send_remote_test", "title": "Send Remote Test Email"},
+      {"id": "sync_remote_mail", "title": "Check Remote Mail"}
+    ],
+    "screens": [
+      {
+        "id": "inbox",
+        "title": "Inbox",
+        "node": {
+          "id": "screen.inbox",
+          "type": "NavigationStack",
+          "children": [
+            {"id": "timeline.primary", "type": "Timeline", "title": "Recent"},
+            {"id": "composer.quick", "type": "Composer", "title": "Reply"},
+            {"id": "button.sync", "type": "Button", "title": "Sync", "action": "sync_now"}
+          ]
+        }
+      },
+      {
+        "id": "timeline",
+        "title": "Timeline",
+        "node": {
+          "id": "screen.timeline",
+          "type": "NavigationStack",
+          "children": [
+            {"id": "timeline.thread", "type": "Timeline", "title": "Conversation"},
+            {"id": "select.transport", "type": "Select", "title": "Transport", "action": "compose_simplex"},
+            {"id": "composer.thread", "type": "Composer", "title": "Message"},
+            {"id": "button.send", "type": "Button", "title": "Send", "action": "send_message"}
+          ]
+        }
+      },
+      {
+        "id": "people",
+        "title": "People",
+        "node": {
+          "id": "screen.people",
+          "type": "List",
+          "children": [
+            {"id": "people.favorites", "type": "Section", "title": "Favorites"},
+            {"id": "people.all", "type": "Section", "title": "All People"}
+          ]
+        }
+      },
+      {
+        "id": "groups",
+        "title": "Groups",
+        "node": {
+          "id": "screen.groups",
+          "type": "List",
+          "children": [
+            {"id": "groups.favorites", "type": "Section", "title": "Favorite Groups"},
+            {"id": "groups.all", "type": "Section", "title": "All Groups"}
+          ]
+        }
+      },
+      {
+        "id": "settings",
+        "title": "Settings",
+        "node": {
+          "id": "screen.settings",
+          "type": "Form",
+          "children": [
+            {"id": "settings.mailRoot", "type": "Label", "title": "Mail Root"},
+            {"id": "settings.simplex", "type": "Toggle", "title": "SimpleX Transport"},
+            {"id": "settings.email", "type": "Toggle", "title": "Email Transport"}
+          ]
+        }
+      },
+      {
+        "id": "remote-setup",
+        "title": "Remote Setup",
+        "node": {
+          "id": "screen.remoteSetup",
+          "type": "Form",
+          "children": [
+            {"id": "remote.host", "type": "Input", "title": "SSH Target", "action": "save_remote_target"},
+            {"id": "remote.bridge", "type": "Input", "title": "Stellar Backend Bridge", "action": "save_remote_bridge"},
+            {"id": "remote.key", "type": "Input", "title": "SSH Key", "action": "save_remote_target"},
+            {"id": "remote.port", "type": "Input", "title": "SSH Port", "action": "save_remote_target"},
+            {"id": "remote.auth", "type": "Toggle", "title": "SSH Key Has Password", "action": "save_remote_auth"},
+            {"id": "remote.deploy", "type": "Button", "title": "Deploy Remote Server", "action": "deploy_remote_server"},
+            {"id": "remote.verify", "type": "Button", "title": "Verify Remote Setup", "action": "verify_remote_server"},
+            {"id": "remote.tls", "type": "Button", "title": "Set Up Remote TLS", "action": "setup_remote_tls"},
+            {"id": "remote.test", "type": "Button", "title": "Send Test Email", "action": "send_remote_test"},
+            {"id": "remote.sync", "type": "Button", "title": "Check Remote Mail", "action": "sync_remote_mail"}
+          ]
+        }
+      }
+    ]
+  },
+  "extensions": []
+}

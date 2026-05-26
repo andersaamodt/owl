@@ -4,7 +4,7 @@ set -eu
 
 test_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
 repo_dir=$(CDPATH= cd -- "$test_dir/../.." && pwd -P)
-tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/owl-render-test.XXXXXX")
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/stellar-render-test.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
 
 failures=0
@@ -83,7 +83,7 @@ swift_uses_native_desktop_idiom() {
   ! awk '
     /private func loadInitialSnapshot[(][)] async/ { in_view = 1 }
     /func refresh[(][)]/ { in_view = 0 }
-    in_view && /OwlBackend[.]tickSimpleX/ { found = 1 }
+    in_view && /StellarBackend[.]tickSimpleX/ { found = 1 }
     END { exit found ? 0 : 1 }
   ' generated/macos/Sources/App/App.swift
   ! grep -Fq 'snapshot = SeedData.snapshot' generated/macos/Sources/App/App.swift
@@ -122,9 +122,9 @@ swift_uses_native_desktop_idiom() {
   grep -q 'NSApp.windowsMenu = windowMenu' generated/macos/Sources/App/App.swift
   grep -q 'let editMenu = NSMenu(title: "Edit")' generated/macos/Sources/App/App.swift
   grep -q 'let messageMenu = NSMenu(title: "Message")' generated/macos/Sources/App/App.swift
-  grep -q 'private let generatedAppMenuTitle = "Owl"' generated/macos/Sources/App/App.swift
+  grep -q 'private let generatedAppMenuTitle = "Stellar"' generated/macos/Sources/App/App.swift
   grep -q 'appMenuItem.title = generatedAppMenuTitle' generated/macos/Sources/App/App.swift
-  grep -q '.executable(name: "owl", targets: \["App"\])' generated/macos/Package.swift
+  grep -q '.executable(name: "stellar", targets: \["App"\])' generated/macos/Package.swift
   grep -q 'actionItem("Preferences...", action: "open_settings", key: ",", modifiers: \\[.command\\])' generated/macos/Sources/App/App.swift
   ! grep -q 'actionItem("Settings...", action: "open_settings"' generated/macos/Sources/App/App.swift
   grep -q 'settingsWindow.title = "Preferences"' generated/macos/Sources/App/App.swift
@@ -213,7 +213,7 @@ swift_compose_accepts_file_drops() {
   grep -Fq 'session.attachDroppedFiles(providers, selecting: thread)' generated/macos/Sources/App/App.swift
   grep -Fq 'static func sendAttachment(root: String, threadID: String, transport: Transport, subject: String, body: String, attachmentPath: String) async throws -> Data' generated/macos/Sources/App/App.swift
   grep -Fq 'runJSON(action: "send-attachment", root: root, args: [threadID, transport.rawValue, subject, body64, attachmentPath])' generated/macos/Sources/App/App.swift
-  grep -Fq 'OwlBackend.sendAttachment(root: root, threadID: thread.id, transport: transport, subject: subject, body: body, attachmentPath: attachment.path)' generated/macos/Sources/App/App.swift
+  grep -Fq 'StellarBackend.sendAttachment(root: root, threadID: thread.id, transport: transport, subject: subject, body: body, attachmentPath: attachment.path)' generated/macos/Sources/App/App.swift
   grep -Fq 'return thread.hasEmailPath && pendingAttachment == nil' generated/macos/Sources/App/App.swift
 }
 
@@ -389,7 +389,7 @@ swift_cards_have_horizontal_flick_actions() {
     END { exit found ? 0 : 1 }
   ' generated/macos/Sources/App/App.swift
   grep -Fq 'func handleSenderDrop(threadID: String, action: SenderDropAction)' generated/macos/Sources/App/App.swift
-  grep -Fq 'private let senderDragPayloadPrefix = "owl-sender:"' generated/macos/Sources/App/App.swift
+  grep -Fq 'private let senderDragPayloadPrefix = "stellar-sender:"' generated/macos/Sources/App/App.swift
   grep -Fq 'return NSItemProvider(object: "\(senderDragPayloadPrefix)\(thread.id)" as NSString)' generated/macos/Sources/App/App.swift
   grep -Fq 'return NSItemProvider(object: "\(senderDragPayloadPrefix)\(threadID)" as NSString)' generated/macos/Sources/App/App.swift
   grep -Fq '@State private var expandedSenderID: String?' generated/macos/Sources/App/App.swift
@@ -426,8 +426,8 @@ swift_message_cards_are_drag_droppable() {
   grep -q 'Label("Undo Last Trash", systemImage: "arrow.uturn.backward")' generated/macos/Sources/App/App.swift
   grep -q 'Label("Open System Trash", systemImage: "trash")' generated/macos/Sources/App/App.swift
   grep -q 'static func messageTrashFiles(root: String, messageID: String) async throws -> TrashFilesResponse' generated/macos/Sources/App/App.swift
-  grep -q 'message-trash-files' generated/macos/Sources/App/App.swift scripts/owl-backend.sh
-  grep -q 'delete_after_trash' generated/macos/Sources/App/App.swift scripts/owl-backend.sh
+  grep -q 'message-trash-files' generated/macos/Sources/App/App.swift scripts/stellar-backend.sh
+  grep -q 'delete_after_trash' generated/macos/Sources/App/App.swift scripts/stellar-backend.sh
   grep -Fq '.zIndex(session.draggingMessageID == nil ? 10 : 0)' generated/macos/Sources/App/App.swift
   grep -Fq 'private var showsMessageDropDock: Bool' generated/macos/Sources/App/App.swift
   grep -Fq 'session.selectedRoute == "inbox-message"' generated/macos/Sources/App/App.swift
@@ -520,10 +520,10 @@ swift_mail_timelines_restore_scroll_position() {
   grep -Fq 'action: "mark-seen"' generated/macos/Sources/App/App.swift
   grep -Fq 'func applySeen(messageID: String)' generated/macos/Sources/App/App.swift
   grep -Fq 'session.noteApplicationFocused()' generated/macos/Sources/App/App.swift
-  grep -Fq 'mark-seen ROOT MESSAGE_ID...' scripts/owl-backend.sh
-  grep -Fq 'mark_seen_action()' scripts/owl-backend.sh
-  grep -Fq 'mark_read_action "$id" true >/dev/null' scripts/owl-backend.sh
-  grep -Fq 'archive_message_action "$id" >/dev/null' scripts/owl-backend.sh
+  grep -Fq 'mark-seen ROOT MESSAGE_ID...' scripts/stellar-backend.sh
+  grep -Fq 'mark_seen_action()' scripts/stellar-backend.sh
+  grep -Fq 'mark_read_action "$id" true >/dev/null' scripts/stellar-backend.sh
+  grep -Fq 'archive_message_action "$id" >/dev/null' scripts/stellar-backend.sh
   grep -Fq 'private func scrollToTimelineTarget(_ proxy: ScrollViewProxy, animated: Bool = true)' generated/macos/Sources/App/App.swift
   grep -Fq 'target == session.timelineEndID(for: session.selectedThread)' generated/macos/Sources/App/App.swift
   grep -Fq 'session.timelineShouldFollowEnd(for: session.selectedThread)' generated/macos/Sources/App/App.swift
@@ -647,25 +647,25 @@ swift_chat_bubble_colors_are_preferences() {
   grep -Fq 'ColorPicker(title, selection: $color, supportsOpacity: false)' generated/macos/Sources/App/App.swift
   grep -Fq 'set: { session.bubbleSelfSimpleXColor = $0; session.persistBubbleColors() }' generated/macos/Sources/App/App.swift
   grep -Fq 'session.bubbleFill(for: message)' generated/macos/Sources/App/App.swift
-  grep -Fq 'llm_spam_category: (($m.llm_spam_category // "") | tostring)' scripts/owl-backend.sh
-  grep -Fq 'llm_spam_source: (($m.llm_spam_source // "") | tostring)' scripts/owl-backend.sh
-  grep -Fq 'bubble_self_simplex)' scripts/owl-backend.sh
-  grep -Fq 'bubble_self_simplex:$bubble_self_simplex' scripts/owl-backend.sh
-  grep -Fq 'mark_read_when_seen)' scripts/owl-backend.sh
-  grep -Fq 'mark_earlier_seen)' scripts/owl-backend.sh
-  grep -Fq 'mark_read_when_seen:$mark_read_when_seen' scripts/owl-backend.sh
-  grep -Fq 'mark_earlier_seen:$mark_earlier_seen' scripts/owl-backend.sh
-  grep -Fq 'mail_root|selected_route|bubble_self_simplex|bubble_self_email|bubble_other_simplex|bubble_other_email|mark_read_when_seen|mark_earlier_seen|show_temporal_distance|detect_temporal_distance)' scripts/owl-backend.sh
+  grep -Fq 'llm_spam_category: (($m.llm_spam_category // "") | tostring)' scripts/stellar-backend.sh
+  grep -Fq 'llm_spam_source: (($m.llm_spam_source // "") | tostring)' scripts/stellar-backend.sh
+  grep -Fq 'bubble_self_simplex)' scripts/stellar-backend.sh
+  grep -Fq 'bubble_self_simplex:$bubble_self_simplex' scripts/stellar-backend.sh
+  grep -Fq 'mark_read_when_seen)' scripts/stellar-backend.sh
+  grep -Fq 'mark_earlier_seen)' scripts/stellar-backend.sh
+  grep -Fq 'mark_read_when_seen:$mark_read_when_seen' scripts/stellar-backend.sh
+  grep -Fq 'mark_earlier_seen:$mark_earlier_seen' scripts/stellar-backend.sh
+  grep -Fq 'mail_root|selected_route|bubble_self_simplex|bubble_self_email|bubble_other_simplex|bubble_other_email|mark_read_when_seen|mark_earlier_seen|show_temporal_distance|detect_temporal_distance)' scripts/stellar-backend.sh
   grep -Fq '@Published var markMessagesReadWhenSeen: Bool = true' generated/macos/Sources/App/App.swift
   grep -Fq '@Published var markEarlierMessagesSeen: Bool = true' generated/macos/Sources/App/App.swift
   grep -Fq 'Toggle("Mark messages read when seen"' generated/macos/Sources/App/App.swift
   grep -Fq 'Toggle("Mark all earlier messages seen"' generated/macos/Sources/App/App.swift
   grep -Fq '.disabled(!session.markMessagesReadWhenSeen)' generated/macos/Sources/App/App.swift
   grep -Fq 'func persistSeenPreferences()' generated/macos/Sources/App/App.swift
-  grep -Fq 'show_temporal_distance)' scripts/owl-backend.sh
-  grep -Fq 'detect_temporal_distance)' scripts/owl-backend.sh
-  grep -Fq 'show_temporal_distance:$show_temporal_distance' scripts/owl-backend.sh
-  grep -Fq 'detect_temporal_distance:$detect_temporal_distance' scripts/owl-backend.sh
+  grep -Fq 'show_temporal_distance)' scripts/stellar-backend.sh
+  grep -Fq 'detect_temporal_distance)' scripts/stellar-backend.sh
+  grep -Fq 'show_temporal_distance:$show_temporal_distance' scripts/stellar-backend.sh
+  grep -Fq 'detect_temporal_distance:$detect_temporal_distance' scripts/stellar-backend.sh
   grep -Fq '@Published var showTemporalDistance: Bool = true' generated/macos/Sources/App/App.swift
   grep -Fq '@Published var detectTemporalDistanceAutomatically: Bool = true' generated/macos/Sources/App/App.swift
   grep -Fq 'Toggle("Show temporal distance"' generated/macos/Sources/App/App.swift
@@ -675,11 +675,11 @@ swift_chat_bubble_colors_are_preferences() {
 
 swift_temporal_distance_ui_exists() {
   cd "$repo_dir"
-  grep -Fq 'set-temporal-distance ROOT THREAD_ID SECONDS|auto' scripts/owl-backend.sh
-  grep -Fq 'set_temporal_distance_action()' scripts/owl-backend.sh
-  grep -Fq 'temporal_distance_seconds:(if $temporal_distance_seconds == "" then null else ($temporal_distance_seconds | tonumber? // null) end)' scripts/owl-backend.sh
-  grep -Fq 'temporal_distance_seconds: ($contact.temporal_distance_seconds // null)' scripts/owl-backend.sh
-  grep -Fq 'temporal_distance_seconds: (.temporal_distance_seconds // null)' scripts/owl-backend.sh
+  grep -Fq 'set-temporal-distance ROOT THREAD_ID SECONDS|auto' scripts/stellar-backend.sh
+  grep -Fq 'set_temporal_distance_action()' scripts/stellar-backend.sh
+  grep -Fq 'temporal_distance_seconds:(if $temporal_distance_seconds == "" then null else ($temporal_distance_seconds | tonumber? // null) end)' scripts/stellar-backend.sh
+  grep -Fq 'temporal_distance_seconds: ($contact.temporal_distance_seconds // null)' scripts/stellar-backend.sh
+  grep -Fq 'temporal_distance_seconds: (.temporal_distance_seconds // null)' scripts/stellar-backend.sh
   grep -Fq 'private enum TemporalDistance' generated/macos/Sources/App/App.swift
   grep -Fq 'func automaticTemporalDistance(for thread: ThreadItem) -> Int?' generated/macos/Sources/App/App.swift
   grep -Fq 'thread.temporal_distance_seconds ?? automaticTemporalDistance(for: thread)' generated/macos/Sources/App/App.swift
@@ -744,7 +744,7 @@ swift_refresh_is_quiet_and_incremental() {
   grep -Fq 'func tickTransportIfStale(force: Bool = false, notify: Bool = false)' generated/macos/Sources/App/App.swift
   grep -Fq 'private struct SimpleXTickResponse: Decodable, Sendable' generated/macos/Sources/App/App.swift
   grep -Fq 'var changedLocalState: Bool' generated/macos/Sources/App/App.swift
-  grep -Fq 'let response = try await OwlBackend.tickSimpleX(root: root)' generated/macos/Sources/App/App.swift
+  grep -Fq 'let response = try await StellarBackend.tickSimpleX(root: root)' generated/macos/Sources/App/App.swift
   grep -Fq 'if response.changedLocalState {' generated/macos/Sources/App/App.swift
   grep -Fq 'static func tickSimpleX(root: String) async throws -> SimpleXTickResponse' generated/macos/Sources/App/App.swift
   ! grep -Fq 'showToast("Loaded ' generated/macos/Sources/App/App.swift
@@ -756,7 +756,7 @@ swift_refresh_is_quiet_and_incremental() {
   ! awk '
     /func refresh[(][)]/ { in_view = 1 }
     /func refreshIfStale/ { in_view = 0 }
-    in_view && /OwlBackend[.]tickSimpleX/ { found = 1 }
+    in_view && /StellarBackend[.]tickSimpleX/ { found = 1 }
     END { exit found ? 0 : 1 }
   ' generated/macos/Sources/App/App.swift
   ! awk '
@@ -779,12 +779,12 @@ swift_remote_server_setup_walkthrough_exists() {
   grep -Fq 'func deployRemoteServer()' generated/macos/Sources/App/App.swift
   grep -Fq 'func sendRemoteTestEmail()' generated/macos/Sources/App/App.swift
   grep -Fq 'func setupTLSForCurrentServer()' generated/macos/Sources/App/App.swift
-  grep -Fq 'OwlBackend.runJSON(action: "settings-remote-set-auth", root: root, args: self.remoteAuthArgs())' generated/macos/Sources/App/App.swift
+  grep -Fq 'StellarBackend.runJSON(action: "settings-remote-set-auth", root: root, args: self.remoteAuthArgs())' generated/macos/Sources/App/App.swift
   grep -Fq 'action: "settings-remote-deploy"' generated/macos/Sources/App/App.swift
   grep -Fq 'action: "settings-remote-send-test"' generated/macos/Sources/App/App.swift
   grep -Fq 'actionArgs: ["remote"] + remoteWorkflowArgs()' generated/macos/Sources/App/App.swift
   grep -Fq 'private func remoteWorkflowArgs() -> [String]' generated/macos/Sources/App/App.swift
-  grep -Fq 'OwlBackend.runJSON(action: "settings-ssl-wizard-status", root: root, args: [mode, remoteHint])' generated/macos/Sources/App/App.swift
+  grep -Fq 'StellarBackend.runJSON(action: "settings-ssl-wizard-status", root: root, args: [mode, remoteHint])' generated/macos/Sources/App/App.swift
   grep -Fq 'runBackendAction("settings-setup-ssl", args: ["local"], status: "TLS setup finished")' generated/macos/Sources/App/App.swift
   grep -Fq 'private struct TLSWizardStatus: Decodable, Sendable' generated/macos/Sources/App/App.swift
   grep -Fq 'private struct TLSDNSRecord: Decodable, Identifiable, Sendable' generated/macos/Sources/App/App.swift
@@ -815,12 +815,12 @@ swift_remote_server_setup_walkthrough_exists() {
   grep -Fq 'Label("Check Remote Mail", systemImage: "arrow.triangle.2.circlepath")' generated/macos/Sources/App/App.swift
   grep -Fq 'Label("Send Test Email", systemImage: "paperplane")' generated/macos/Sources/App/App.swift
   grep -Fq 'Text(session.remoteStatusSummary)' generated/macos/Sources/App/App.swift
-  grep -Fq 'settings-remote-deploy)' scripts/owl-backend.sh
-  grep -Fq 'OWL_MAIL_LIST_TIMEOUT_SECONDS:-15' scripts/owl-backend.sh
-  grep -Fq 'OWL_REMOTE_DEPLOY_TIMEOUT_SECONDS:-1800' scripts/owl-backend.sh
-  grep -Fq 'OWL_REMOTE_TLS_TIMEOUT_SECONDS:-900' scripts/owl-backend.sh
-  grep -Fq '../owl-nonnative/scripts/owl-desktop-backend.sh' scripts/owl-backend.sh
-  grep -Fq 'git/owl-nonnative/scripts/owl-desktop-backend.sh' scripts/owl-backend.sh
+  grep -Fq 'settings-remote-deploy)' scripts/stellar-backend.sh
+  grep -Fq 'STELLAR_MAIL_LIST_TIMEOUT_SECONDS:-15' scripts/stellar-backend.sh
+  grep -Fq 'STELLAR_REMOTE_DEPLOY_TIMEOUT_SECONDS:-1800' scripts/stellar-backend.sh
+  grep -Fq 'STELLAR_REMOTE_TLS_TIMEOUT_SECONDS:-900' scripts/stellar-backend.sh
+  grep -Fq '../stellar-nonnative/scripts/stellar-desktop-backend.sh' scripts/stellar-backend.sh
+  grep -Fq 'git/stellar-nonnative/scripts/stellar-desktop-backend.sh' scripts/stellar-backend.sh
   ! grep -Fq 'Section("Remote") {' generated/macos/Sources/App/App.swift
 }
 
@@ -841,12 +841,12 @@ linux_uses_native_gtk_and_argv_backend() {
 
 secure_chat_hook_has_offline_timeout() {
   cd "$repo_dir"
-  grep -Fq 'ssh_transport()' scripts/owl-secure-chat-hook.sh
-  grep -Fq 'timeout_seconds=${OWL_TRANSPORT_TIMEOUT:-4}' scripts/owl-secure-chat-hook.sh
-  grep -Fq -- '-o BatchMode=yes' scripts/owl-secure-chat-hook.sh
-  grep -Fq -- '-o ConnectTimeout="$timeout_seconds"' scripts/owl-secure-chat-hook.sh
-  grep -Fq -- '-o ServerAliveCountMax=1' scripts/owl-secure-chat-hook.sh
-  ! grep -Fq 'response=$(ssh "$ssh_host"' scripts/owl-secure-chat-hook.sh
+  grep -Fq 'ssh_transport()' scripts/stellar-secure-chat-hook.sh
+  grep -Fq 'timeout_seconds=${STELLAR_TRANSPORT_TIMEOUT:-4}' scripts/stellar-secure-chat-hook.sh
+  grep -Fq -- '-o BatchMode=yes' scripts/stellar-secure-chat-hook.sh
+  grep -Fq -- '-o ConnectTimeout="$timeout_seconds"' scripts/stellar-secure-chat-hook.sh
+  grep -Fq -- '-o ServerAliveCountMax=1' scripts/stellar-secure-chat-hook.sh
+  ! grep -Fq 'response=$(ssh "$ssh_host"' scripts/stellar-secure-chat-hook.sh
 }
 
 run_case "render is deterministic" render_is_deterministic

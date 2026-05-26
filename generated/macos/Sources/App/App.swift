@@ -10,8 +10,8 @@ private let canonicalIR = #"""
   "version": "native-desktop-ir/v1",
   "format": "yaml-1.2-json-compatible",
   "app": {
-    "id": "owl",
-    "name": "Owl",
+    "id": "stellar",
+    "name": "Stellar",
     "targets": [
       "macos",
       "linux"
@@ -115,7 +115,7 @@ private let canonicalIR = #"""
       "id": "window.main",
       "name": "mainWindow",
       "type": "Window",
-      "title": "Owl",
+      "title": "Stellar",
       "width": 128,
       "minWidth": 96,
       "height": 82,
@@ -127,7 +127,7 @@ private let canonicalIR = #"""
           {
             "id": "menu.app",
             "type": "Menu",
-            "title": "Owl",
+            "title": "Stellar",
             "children": [
               {
                 "id": "menuitem.settings",
@@ -353,25 +353,25 @@ private let canonicalIR = #"""
 }
 """#
 
-private let generatedAppName = "Owl"
-private let generatedAppMenuTitle = "Owl"
-private let generatedAppID = "owl"
+private let generatedAppName = "Stellar"
+private let generatedAppMenuTitle = "Stellar"
+private let generatedAppID = "stellar"
 private let generatedAppVersion = "0.1.0"
-private let messageDragPayloadPrefix = "owl-message:"
-private let senderDragPayloadPrefix = "owl-sender:"
+private let messageDragPayloadPrefix = "stellar-message:"
+private let senderDragPayloadPrefix = "stellar-sender:"
 
 private final class NonDraggableHostingView<Content: View>: NSHostingView<Content> {
   override var mouseDownCanMoveWindow: Bool { false }
 }
 
 @main
-private enum OwlGeneratedApp {
-  @MainActor private static var appDelegate: OwlAppDelegate?
+private enum StellarGeneratedApp {
+  @MainActor private static var appDelegate: StellarAppDelegate?
 
   @MainActor
   static func main() {
     let app = NSApplication.shared
-    let delegate = OwlAppDelegate()
+    let delegate = StellarAppDelegate()
     appDelegate = delegate
     app.delegate = delegate
     app.setActivationPolicy(.regular)
@@ -380,8 +380,8 @@ private enum OwlGeneratedApp {
 }
 
 @MainActor
-private final class OwlAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-  private let session = OwlSession()
+private final class StellarAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+  private let session = StellarSession()
   private var window: NSWindow?
   private var settingsWindow: NSWindow?
   private var titlebarTabsController: NSHostingController<AnyView>?
@@ -422,7 +422,7 @@ private final class OwlAppDelegate: NSObject, NSApplicationDelegate, NSWindowDel
       backing: .buffered,
       defer: false
     )
-    window.title = "Owl"
+    window.title = "Stellar"
     window.titleVisibility = .hidden
     window.contentView = hostingView
     window.isReleasedWhenClosed = false
@@ -1033,7 +1033,7 @@ private extension Color {
     self = Color(red: red, green: green, blue: blue)
   }
 
-  var owlHexString: String {
+  var stellarHexString: String {
     guard let color = NSColor(self).usingColorSpace(.sRGB) else {
       return "#FFFFFF"
     }
@@ -1045,7 +1045,7 @@ private extension Color {
 }
 
 private extension String {
-  func owlBool(defaultValue: Bool) -> Bool {
+  func stellarBool(defaultValue: Bool) -> Bool {
     switch trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
     case "true", "1", "yes", "on":
       return true
@@ -1286,7 +1286,7 @@ private struct AttachmentItem: Decodable, Hashable, Sendable {
     guard (isVideo || isAudio), let data else { return nil }
     let safeName = name.isEmpty ? "attachment.bin" : name.replacingOccurrences(of: "/", with: "-")
     let url = FileManager.default.temporaryDirectory
-      .appendingPathComponent("owl-secure-chat")
+      .appendingPathComponent("stellar-secure-chat")
       .appendingPathComponent(safeName)
     do {
       try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -1621,7 +1621,7 @@ private struct PendingAttachment: Identifiable, Hashable {
 }
 
 @MainActor
-private final class OwlSession: ObservableObject {
+private final class StellarSession: ObservableObject {
   @Published var snapshot: Snapshot = Snapshot(root: defaultMailRoot())
   @Published var hasLoadedInitialSnapshot: Bool = false
   @Published var startupMessage: String = "Loading mailbox..."
@@ -1912,7 +1912,7 @@ private final class OwlSession: ObservableObject {
   func loadPreferencesThenRefresh() async {
     startupMessage = "Loading preferences..."
     do {
-      let prefs = try await OwlBackend.uiPrefs(root: mailRoot)
+      let prefs = try await StellarBackend.uiPrefs(root: mailRoot)
       if !prefs.mail_root.isEmpty {
         mailRoot = prefs.mail_root
       }
@@ -1939,7 +1939,7 @@ private final class OwlSession: ObservableObject {
     let root = mailRoot
     isRefreshingSnapshot = true
     do {
-      let next = try await OwlBackend.snapshot(root: root)
+      let next = try await StellarBackend.snapshot(root: root)
       self.apply(snapshot: next)
       self.statusText = "Loaded \(next.threads.count) conversations from \(next.root)"
       self.hasLoadedInitialSnapshot = true
@@ -1964,7 +1964,7 @@ private final class OwlSession: ObservableObject {
     isRefreshingSnapshot = true
     Task {
       do {
-        let next = try await OwlBackend.snapshot(root: root)
+        let next = try await StellarBackend.snapshot(root: root)
         self.apply(snapshot: next)
         self.statusText = "Loaded \(next.threads.count) conversations from \(next.root)"
         self.isRefreshingSnapshot = false
@@ -2018,7 +2018,7 @@ private final class OwlSession: ObservableObject {
     isTickingTransport = true
     Task {
       do {
-        let response = try await OwlBackend.tickSimpleX(root: root)
+        let response = try await StellarBackend.tickSimpleX(root: root)
         self.isTickingTransport = false
         if notify {
           self.showStatus("SimpleX incoming queue checked")
@@ -2041,7 +2041,7 @@ private final class OwlSession: ObservableObject {
     let root = mailRoot
     Task {
       do {
-        let next = try await OwlBackend.bootstrapStatus(root: root)
+        let next = try await StellarBackend.bootstrapStatus(root: root)
         self.bootstrap = next
       } catch {
         self.bootstrap = SimpleXBootstrap(install_state: "unknown", last_error: error.localizedDescription)
@@ -2184,7 +2184,7 @@ private final class OwlSession: ObservableObject {
     let root = mailRoot
     let sender = message.sender
     runMessageAction(status: "Moved sender to \(list)", refreshAfter: false) {
-      try await OwlBackend.runJSON(action: "move-sender", root: root, args: ["quarantine", list, message.sender])
+      try await StellarBackend.runJSON(action: "move-sender", root: root, args: ["quarantine", list, message.sender])
     } afterSuccess: {
       self.applySenderMove(sender: sender, to: list)
     }
@@ -2198,7 +2198,7 @@ private final class OwlSession: ObservableObject {
     let root = mailRoot
     let sender = message.sender
     runMessageAction(status: "Moved sender to \(list)", refreshAfter: false) {
-      try await OwlBackend.runJSON(action: "move-sender", root: root, args: ["quarantine", list, sender])
+      try await StellarBackend.runJSON(action: "move-sender", root: root, args: ["quarantine", list, sender])
     } afterSuccess: {
       self.applySenderMove(sender: sender, to: list)
     }
@@ -2533,7 +2533,7 @@ private final class OwlSession: ObservableObject {
     let root = mailRoot
     Task {
       do {
-        _ = try await OwlBackend.runJSON(action: "mark-seen", root: root, args: uniqueIDs)
+        _ = try await StellarBackend.runJSON(action: "mark-seen", root: root, args: uniqueIDs)
         for id in uniqueIDs {
           self.applySeen(messageID: id)
         }
@@ -2548,7 +2548,7 @@ private final class OwlSession: ObservableObject {
     let route = selectedRoute
     let root = mailRoot
     Task {
-      try? await OwlBackend.setUIPref(root: root, key: "selected_route", value: route)
+      try? await StellarBackend.setUIPref(root: root, key: "selected_route", value: route)
     }
   }
 
@@ -2557,10 +2557,10 @@ private final class OwlSession: ObservableObject {
     bubbleSelfEmailColor = Color(hex: prefs.bubble_self_email, fallback: BubbleColors.defaultSelfEmail)
     bubbleOtherSimpleXColor = Color(hex: prefs.bubble_other_simplex, fallback: BubbleColors.defaultOtherSimpleX)
     bubbleOtherEmailColor = Color(hex: prefs.bubble_other_email, fallback: BubbleColors.defaultOtherEmail)
-    markMessagesReadWhenSeen = prefs.mark_read_when_seen.owlBool(defaultValue: true)
-    markEarlierMessagesSeen = prefs.mark_earlier_seen.owlBool(defaultValue: true)
-    showTemporalDistance = prefs.show_temporal_distance.owlBool(defaultValue: true)
-    detectTemporalDistanceAutomatically = prefs.detect_temporal_distance.owlBool(defaultValue: true)
+    markMessagesReadWhenSeen = prefs.mark_read_when_seen.stellarBool(defaultValue: true)
+    markEarlierMessagesSeen = prefs.mark_earlier_seen.stellarBool(defaultValue: true)
+    showTemporalDistance = prefs.show_temporal_distance.stellarBool(defaultValue: true)
+    detectTemporalDistanceAutomatically = prefs.detect_temporal_distance.stellarBool(defaultValue: true)
   }
 
   func persistSeenPreferences() {
@@ -2568,8 +2568,8 @@ private final class OwlSession: ObservableObject {
     let markWhenSeen = markMessagesReadWhenSeen
     let markEarlier = markEarlierMessagesSeen
     Task {
-      try? await OwlBackend.setUIPref(root: root, key: "mark_read_when_seen", value: markWhenSeen ? "true" : "false")
-      try? await OwlBackend.setUIPref(root: root, key: "mark_earlier_seen", value: markEarlier ? "true" : "false")
+      try? await StellarBackend.setUIPref(root: root, key: "mark_read_when_seen", value: markWhenSeen ? "true" : "false")
+      try? await StellarBackend.setUIPref(root: root, key: "mark_earlier_seen", value: markEarlier ? "true" : "false")
     }
   }
 
@@ -2578,22 +2578,22 @@ private final class OwlSession: ObservableObject {
     let show = showTemporalDistance
     let detect = detectTemporalDistanceAutomatically
     Task {
-      try? await OwlBackend.setUIPref(root: root, key: "show_temporal_distance", value: show ? "true" : "false")
-      try? await OwlBackend.setUIPref(root: root, key: "detect_temporal_distance", value: detect ? "true" : "false")
+      try? await StellarBackend.setUIPref(root: root, key: "show_temporal_distance", value: show ? "true" : "false")
+      try? await StellarBackend.setUIPref(root: root, key: "detect_temporal_distance", value: detect ? "true" : "false")
     }
   }
 
   func persistBubbleColors() {
     let root = mailRoot
     let values = [
-      ("bubble_self_simplex", bubbleSelfSimpleXColor.owlHexString),
-      ("bubble_self_email", bubbleSelfEmailColor.owlHexString),
-      ("bubble_other_simplex", bubbleOtherSimpleXColor.owlHexString),
-      ("bubble_other_email", bubbleOtherEmailColor.owlHexString)
+      ("bubble_self_simplex", bubbleSelfSimpleXColor.stellarHexString),
+      ("bubble_self_email", bubbleSelfEmailColor.stellarHexString),
+      ("bubble_other_simplex", bubbleOtherSimpleXColor.stellarHexString),
+      ("bubble_other_email", bubbleOtherEmailColor.stellarHexString)
     ]
     Task {
       for (key, value) in values {
-        try? await OwlBackend.setUIPref(root: root, key: key, value: value)
+        try? await StellarBackend.setUIPref(root: root, key: key, value: value)
       }
     }
   }
@@ -2715,16 +2715,16 @@ private final class OwlSession: ObservableObject {
     Task {
       do {
         if let attachment {
-          _ = try await OwlBackend.sendAttachment(root: root, threadID: thread.id, transport: transport, subject: subject, body: body, attachmentPath: attachment.path)
+          _ = try await StellarBackend.sendAttachment(root: root, threadID: thread.id, transport: transport, subject: subject, body: body, attachmentPath: attachment.path)
         } else {
-          _ = try await OwlBackend.send(root: root, threadID: thread.id, transport: transport, subject: subject, body: body)
+          _ = try await StellarBackend.send(root: root, threadID: thread.id, transport: transport, subject: subject, body: body)
         }
         if transport == .simplex {
-          _ = try await OwlBackend.tickSimpleX(root: root)
+          _ = try await StellarBackend.tickSimpleX(root: root)
         }
         self.updateOptimisticOutgoingMessage(id: optimistic.id, status: "sent")
         self.isBusy = false
-        self.showStatus(transport == .email ? "Email sent through Owl outbox." : "SimpleX message sent.")
+        self.showStatus(transport == .email ? "Email sent through Stellar outbox." : "SimpleX message sent.")
         self.refresh()
       } catch {
         self.updateOptimisticOutgoingMessage(id: optimistic.id, status: "error")
@@ -2740,7 +2740,7 @@ private final class OwlSession: ObservableObject {
   func archive(_ message: MessageItem) {
     let root = mailRoot
     runMessageAction(status: "Removed from Inbox", refreshAfter: false) {
-      try await OwlBackend.runJSON(action: "archive-message", root: root, args: [message.id])
+      try await StellarBackend.runJSON(action: "archive-message", root: root, args: [message.id])
     } afterSuccess: {
       self.applyArchived(messageID: message.id)
       self.refresh()
@@ -2757,14 +2757,14 @@ private final class OwlSession: ObservableObject {
     showStatus("Moving message to system Trash", busy: true)
     Task {
       do {
-        let response = try await OwlBackend.messageTrashFiles(root: root, messageID: message.id)
+        let response = try await StellarBackend.messageTrashFiles(root: root, messageID: message.id)
         let urls = response.paths.map { URL(fileURLWithPath: $0) }
         guard !urls.isEmpty else {
-          throw NSError(domain: "OwlTrash", code: 1, userInfo: [NSLocalizedDescriptionKey: "Message files were not found for system Trash."])
+          throw NSError(domain: "StellarTrash", code: 1, userInfo: [NSLocalizedDescriptionKey: "Message files were not found for system Trash."])
         }
         let recycled = try await recycleInSystemTrash(urls)
         if response.delete_after_trash {
-          _ = try await OwlBackend.runJSON(action: "delete-message", root: root, args: [message.id])
+          _ = try await StellarBackend.runJSON(action: "delete-message", root: root, args: [message.id])
         }
         self.lastSystemTrashAction = SystemTrashAction(
           messageID: message.id,
@@ -2794,7 +2794,7 @@ private final class OwlSession: ObservableObject {
         for mapping in action.originalToTrash.reversed() {
           try fileManager.createDirectory(at: mapping.original.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
           if fileManager.fileExists(atPath: mapping.original.path) {
-            throw NSError(domain: "OwlTrash", code: 2, userInfo: [NSLocalizedDescriptionKey: "\(mapping.original.lastPathComponent) already exists at its original location."])
+            throw NSError(domain: "StellarTrash", code: 2, userInfo: [NSLocalizedDescriptionKey: "\(mapping.original.lastPathComponent) already exists at its original location."])
           }
           try fileManager.moveItem(at: mapping.trashed, to: mapping.original)
         }
@@ -2828,7 +2828,7 @@ private final class OwlSession: ObservableObject {
   func toggleStar(_ message: MessageItem) {
     let root = mailRoot
     runMessageAction(status: message.starred ? "Unstarred" : "Starred", refreshAfter: false) {
-      try await OwlBackend.runJSON(action: "toggle-star", root: root, args: [message.id, message.starred ? "false" : "true"])
+      try await StellarBackend.runJSON(action: "toggle-star", root: root, args: [message.id, message.starred ? "false" : "true"])
     } afterSuccess: {
       self.applyMessageUpdate(id: message.id) { updated in
         updated.starred.toggle()
@@ -2840,7 +2840,7 @@ private final class OwlSession: ObservableObject {
   func markRead(_ message: MessageItem, read: Bool) {
     let root = mailRoot
     runMessageAction(status: read ? "Marked read" : "Marked unread", refreshAfter: false) {
-      try await OwlBackend.runJSON(action: "mark-read", root: root, args: [message.id, read ? "true" : "false"])
+      try await StellarBackend.runJSON(action: "mark-read", root: root, args: [message.id, read ? "true" : "false"])
     } afterSuccess: {
       self.applyMessageUpdate(id: message.id) { updated in
         updated.read = read
@@ -2941,7 +2941,7 @@ private final class OwlSession: ObservableObject {
   func runBackendAction(_ action: String, args: [String] = [], status: String) {
     let root = mailRoot
     runMessageAction(status: status) {
-      try await OwlBackend.runJSON(action: action, root: root, args: args)
+      try await StellarBackend.runJSON(action: action, root: root, args: args)
     }
   }
 
@@ -2965,7 +2965,7 @@ private final class OwlSession: ObservableObject {
       applyContactBinding(threadID: thread.id, name: name, email: email, simplex: simplex, favorite: favorite)
     }
     runMessageAction(status: "Contact binding saved", refreshAfter: false) {
-      try await OwlBackend.runJSON(action: "bind-contact", root: root, args: args)
+      try await StellarBackend.runJSON(action: "bind-contact", root: root, args: args)
     }
   }
 
@@ -2995,7 +2995,7 @@ private final class OwlSession: ObservableObject {
       )
     }
     runMessageAction(status: "Contact renamed", refreshAfter: false) {
-      try await OwlBackend.runJSON(action: "bind-contact", root: root, args: args)
+      try await StellarBackend.runJSON(action: "bind-contact", root: root, args: args)
     }
   }
 
@@ -3024,7 +3024,7 @@ private final class OwlSession: ObservableObject {
       )
     }
     runMessageAction(status: favorite ? "Added to Favorites" : "Removed from Favorites", refreshAfter: false) {
-      try await OwlBackend.runJSON(action: "bind-contact", root: root, args: args)
+      try await StellarBackend.runJSON(action: "bind-contact", root: root, args: args)
     }
   }
 
@@ -3067,7 +3067,7 @@ private final class OwlSession: ObservableObject {
     applyTemporalDistance(threadID: thread.id, seconds: normalized)
     let root = mailRoot
     runMessageAction(status: normalized == nil ? "Temporal distance automatic" : "Temporal distance \(TemporalDistance.label(normalized ?? 0))", refreshAfter: false) {
-      try await OwlBackend.runJSON(action: "set-temporal-distance", root: root, args: [thread.id, normalized.map(String.init) ?? "auto"])
+      try await StellarBackend.runJSON(action: "set-temporal-distance", root: root, args: [thread.id, normalized.map(String.init) ?? "auto"])
     }
   }
 
@@ -3151,7 +3151,7 @@ private final class OwlSession: ObservableObject {
   func saveRemoteTarget() {
     let root = mailRoot
     runMessageAction(status: "Remote target saved", refreshAfter: false) {
-      let data = try await OwlBackend.runJSON(action: "settings-remote-set-target", root: root, args: self.remoteTargetArgs())
+      let data = try await StellarBackend.runJSON(action: "settings-remote-set-target", root: root, args: self.remoteTargetArgs())
       await MainActor.run { self.applyRemoteActionResult(data) }
       return data
     }
@@ -3160,7 +3160,7 @@ private final class OwlSession: ObservableObject {
   func saveRemoteAuth() {
     let root = mailRoot
     runMessageAction(status: "Remote SSH authentication saved", refreshAfter: false) {
-      let data = try await OwlBackend.runJSON(action: "settings-remote-set-auth", root: root, args: self.remoteAuthArgs())
+      let data = try await StellarBackend.runJSON(action: "settings-remote-set-auth", root: root, args: self.remoteAuthArgs())
       await MainActor.run { self.applyRemoteActionResult(data) }
       return data
     }
@@ -3227,7 +3227,7 @@ private final class OwlSession: ObservableObject {
     tlsWizardError = ""
     Task {
       do {
-        let data = try await OwlBackend.runJSON(action: "settings-ssl-wizard-status", root: root, args: [mode, remoteHint])
+        let data = try await StellarBackend.runJSON(action: "settings-ssl-wizard-status", root: root, args: [mode, remoteHint])
         let status = try JSONDecoder().decode(TLSWizardStatus.self, from: data)
         self.tlsWizardStatus = status
         self.isRefreshingTLSWizard = false
@@ -3259,12 +3259,12 @@ private final class OwlSession: ObservableObject {
     showStatus(title, busy: true)
     Task {
       do {
-        let targetData = try await OwlBackend.runJSON(action: "settings-remote-set-target", root: root, args: self.remoteTargetArgs())
+        let targetData = try await StellarBackend.runJSON(action: "settings-remote-set-target", root: root, args: self.remoteTargetArgs())
         self.applyRemoteActionResult(targetData)
-        let authData = try await OwlBackend.runJSON(action: "settings-remote-set-auth", root: root, args: self.remoteAuthArgs())
+        let authData = try await StellarBackend.runJSON(action: "settings-remote-set-auth", root: root, args: self.remoteAuthArgs())
         self.applyRemoteActionResult(authData)
         let args = actionArgs ?? remoteWorkflowArgs()
-        let data = try await OwlBackend.runJSON(action: action, root: root, args: args)
+        let data = try await StellarBackend.runJSON(action: action, root: root, args: args)
         self.applyRemoteActionResult(data)
         let result = try? JSONDecoder().decode(BackendActionResult.self, from: data)
         self.isBusy = false
@@ -3294,7 +3294,7 @@ private final class OwlSession: ObservableObject {
     if panel.runModal() == .OK, let url = panel.url {
       mailRoot = url.path
       Task {
-        try? await OwlBackend.setUIPref(root: url.path, key: "mail_root", value: url.path)
+        try? await StellarBackend.setUIPref(root: url.path, key: "mail_root", value: url.path)
       }
       refresh()
       tickTransportIfStale(force: true)
@@ -3304,21 +3304,21 @@ private final class OwlSession: ObservableObject {
   func installSimpleX() {
     let root = mailRoot
     runMessageAction(status: "SimpleX CLI install checked") {
-      try await OwlBackend.runJSON(action: "install-simplex-cli", root: root, args: [])
+      try await StellarBackend.runJSON(action: "install-simplex-cli", root: root, args: [])
     }
   }
 
   func provisionSimpleX() {
     let root = mailRoot
     runMessageAction(status: "SimpleX profile provisioned") {
-      try await OwlBackend.runJSON(action: "provision-simplex-identity", root: root, args: ["default", "Owl", "Owl"])
+      try await StellarBackend.runJSON(action: "provision-simplex-identity", root: root, args: ["default", "Stellar", "Stellar"])
     }
   }
 
   func configureSimpleXLocalTransport() {
     let root = mailRoot
     runMessageAction(status: "Local SimpleX transport enabled") {
-      try await OwlBackend.runJSON(action: "configure-simplex-local-transport", root: root, args: ["default"])
+      try await StellarBackend.runJSON(action: "configure-simplex-local-transport", root: root, args: ["default"])
     }
   }
 
@@ -3409,7 +3409,7 @@ private final class OwlSession: ObservableObject {
           persistSelectedRoute()
         }
       case "open_settings":
-        (NSApp.delegate as? OwlAppDelegate)?.showSettingsWindow(nil)
+        (NSApp.delegate as? StellarAppDelegate)?.showSettingsWindow(nil)
       case "choose_mail_root":
         chooseMailRoot()
       case "setup_folders":
@@ -3448,7 +3448,7 @@ private final class OwlSession: ObservableObject {
   }
 }
 
-private enum OwlBackend {
+private enum StellarBackend {
   static func uiPrefs(root: String) async throws -> UIPrefs {
     let data = try await runJSON(action: "get-ui-prefs", root: root, args: [])
     return try JSONDecoder().decode(UIPrefs.self, from: data)
@@ -3496,7 +3496,7 @@ private enum OwlBackend {
 
   private static func run(action: String, root: String, args: [String]) throws -> Data {
     guard let script = resolveBackendScript() else {
-      throw NSError(domain: "OwlBackend", code: 1, userInfo: [NSLocalizedDescriptionKey: "Owl backend script could not be resolved."])
+      throw NSError(domain: "StellarBackend", code: 1, userInfo: [NSLocalizedDescriptionKey: "Stellar backend script could not be resolved."])
     }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -3504,8 +3504,8 @@ private enum OwlBackend {
 
     let fm = FileManager.default
     let temp = fm.temporaryDirectory
-    let stdoutURL = temp.appendingPathComponent("owl-stdout-\(UUID().uuidString).json")
-    let stderrURL = temp.appendingPathComponent("owl-stderr-\(UUID().uuidString).log")
+    let stdoutURL = temp.appendingPathComponent("stellar-stdout-\(UUID().uuidString).json")
+    let stderrURL = temp.appendingPathComponent("stellar-stderr-\(UUID().uuidString).log")
     fm.createFile(atPath: stdoutURL.path, contents: nil)
     fm.createFile(atPath: stderrURL.path, contents: nil)
     let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
@@ -3527,7 +3527,7 @@ private enum OwlBackend {
       let message = String(data: err, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         ?? String(data: out, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         ?? "Backend command failed."
-      throw NSError(domain: "OwlBackend", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: message])
+      throw NSError(domain: "StellarBackend", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: message])
     }
     return out
   }
@@ -3535,23 +3535,23 @@ private enum OwlBackend {
   private static func resolveBackendScript() -> URL? {
     let fm = FileManager.default
     var candidates: [URL] = []
-    if let override = ProcessInfo.processInfo.environment["OWL_BACKEND"], !override.isEmpty {
+    if let override = ProcessInfo.processInfo.environment["STELLAR_BACKEND"], !override.isEmpty {
       candidates.append(URL(fileURLWithPath: override))
     }
     if let resourceURL = Bundle.main.resourceURL {
-      candidates.append(resourceURL.appendingPathComponent("scripts/owl-backend.sh"))
-      candidates.append(resourceURL.appendingPathComponent("owl/scripts/owl-backend.sh"))
+      candidates.append(resourceURL.appendingPathComponent("scripts/stellar-backend.sh"))
+      candidates.append(resourceURL.appendingPathComponent("stellar/scripts/stellar-backend.sh"))
     }
     let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
-    candidates.append(cwd.appendingPathComponent("../../scripts/owl-backend.sh").standardizedFileURL)
-    candidates.append(cwd.appendingPathComponent("scripts/owl-backend.sh").standardizedFileURL)
-    candidates.append(fm.homeDirectoryForCurrentUser.appendingPathComponent("git/owl/scripts/owl-backend.sh"))
+    candidates.append(cwd.appendingPathComponent("../../scripts/stellar-backend.sh").standardizedFileURL)
+    candidates.append(cwd.appendingPathComponent("scripts/stellar-backend.sh").standardizedFileURL)
+    candidates.append(fm.homeDirectoryForCurrentUser.appendingPathComponent("git/stellar/scripts/stellar-backend.sh"))
     return candidates.first(where: { fm.isExecutableFile(atPath: $0.path) || fm.fileExists(atPath: $0.path) })
   }
 }
 
 private struct RootView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
 
   var body: some View {
     Group {
@@ -3601,7 +3601,7 @@ private struct StartupSplashView: View {
 }
 
 private struct ToastOverlay: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
 
   var body: some View {
     if session.toastVisible {
@@ -3698,7 +3698,7 @@ private struct SenderDropDock: View {
 }
 
 private struct SenderDropTarget: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   let action: SenderDropAction
   @State private var isTargeted = false
 
@@ -3736,7 +3736,7 @@ private struct SenderDropTarget: View {
 }
 
 private struct MessageDropDock: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
 
   var body: some View {
     HStack(alignment: .bottom) {
@@ -3764,7 +3764,7 @@ private struct MessageDropDock: View {
 }
 
 private struct MessageDropTarget: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   let action: MessageDropAction
   @State private var isTargeted = false
 
@@ -3864,7 +3864,7 @@ private struct PrioritiesTrashIcon: Shape {
 }
 
 private struct DraggableMessageCardModifier: ViewModifier {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   @State private var dragOffset: CGSize = .zero
   @State private var isPointerDragging = false
   let message: MessageItem
@@ -3938,7 +3938,7 @@ private extension View {
 }
 
 private struct PrimaryTabBar: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
 
   var body: some View {
     Group {
@@ -4020,7 +4020,7 @@ private struct TabButton: View {
 }
 
 private struct SidebarView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   @Namespace private var threadMoveNamespace
 
   var body: some View {
@@ -4118,7 +4118,7 @@ private struct SidebarView: View {
 }
 
 private struct SidebarInboxRow: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
 
   var body: some View {
     HStack(spacing: 9) {
@@ -4133,7 +4133,7 @@ private struct SidebarInboxRow: View {
 }
 
 private struct SidebarThreadRow: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   @FocusState private var nameFieldFocused: Bool
   @State private var isRenaming = false
   @State private var isAttachmentTargeted = false
@@ -4282,7 +4282,7 @@ private struct CountBadge: View {
 }
 
 private struct TemporalDistanceBadge: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   let thread: ThreadItem
 
   var body: some View {
@@ -4317,7 +4317,7 @@ private struct TemporalDistanceBadge: View {
 }
 
 private struct MainContentView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   @Namespace private var inboxCardNamespace
 
   var body: some View {
@@ -4519,7 +4519,7 @@ private struct StaticCardStackBackplates: View {
 }
 
 private struct NewSendersView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   @State private var stage: NewSendersFlowStage = .senders
 
   var selectedMessage: MessageItem? {
@@ -4589,7 +4589,7 @@ private struct NewSendersView: View {
 }
 
 private struct NewSenderStackSurface: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   @Binding var stage: NewSendersFlowStage
   @State private var expandedSenderID: String?
 
@@ -4702,7 +4702,7 @@ private struct NewSenderRealPile: View {
 }
 
 private struct NewSenderStackCard: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   @State private var flickOffset: CGFloat = 0
   let thread: ThreadItem
   let isSelected: Bool
@@ -4794,7 +4794,7 @@ private struct NewSenderStackCard: View {
 }
 
 private struct NewSenderMessageStackSurface: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   @Binding var stage: NewSendersFlowStage
 
   var body: some View {
@@ -4930,7 +4930,7 @@ private struct NewSenderReaderSurface: View {
 }
 
 private struct MailView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   @State private var contactListWidth: CGFloat = 290
   @State private var inspectorWidth: CGFloat = 260
   @State private var contactInfoVisible = true
@@ -5051,7 +5051,7 @@ private enum MailContactSort: String, CaseIterable {
 }
 
 private struct ContactListView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   @Namespace private var threadMoveNamespace
   @State private var contactFilter: MailContactFilter = .all
   @State private var contactSort: MailContactSort = .recent
@@ -5245,7 +5245,7 @@ private struct MessageListRow: View {
 }
 
 private struct MessageReaderView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   let message: MessageItem?
   let emptyTitle: String
   let animationNamespace: Namespace.ID
@@ -5286,7 +5286,7 @@ private struct MessageReaderView: View {
 }
 
 private struct InboxView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   let animationNamespace: Namespace.ID
 
   var body: some View {
@@ -5381,7 +5381,7 @@ private struct InboxView: View {
 }
 
 private struct MailboxView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -5397,7 +5397,7 @@ private struct MailboxView: View {
 }
 
 private struct MailboxMessageRow: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   let message: MessageItem
 
   var body: some View {
@@ -5437,7 +5437,7 @@ private struct MailboxMessageRow: View {
 }
 
 private struct DraftsView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -5465,7 +5465,7 @@ private struct DraftsView: View {
 }
 
 private struct EventsView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -5493,7 +5493,7 @@ private struct EventsView: View {
 }
 
 private struct MessageReaderCard: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   let message: MessageItem
   var animationNamespace: Namespace.ID? = nil
 
@@ -5551,7 +5551,7 @@ private struct MessageReaderCard: View {
 }
 
 private struct InboxStackCard: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   let message: MessageItem
   let stackDepth: Int
   let isFocused: Bool
@@ -5598,7 +5598,7 @@ private struct InboxStackCard: View {
 }
 
 private struct InboxCardContent: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   let message: MessageItem
   let actionsVisible: Bool
 
@@ -5686,7 +5686,7 @@ private struct SeenMessageEdges {
 }
 
 private struct TimelineView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   @Binding var inspectorWidth: CGFloat
   @Binding var contactInfoVisible: Bool
   @State private var isAtTimelineEnd = true
@@ -5935,7 +5935,7 @@ private struct TimelineView: View {
 }
 
 private struct MessageBubble: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   @State private var showingDetails = false
   let message: MessageItem
 
@@ -6187,7 +6187,7 @@ private struct ExternalAttachmentOpenIconButton: View {
 }
 
 private struct InboxSplitPill: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   let message: MessageItem
 
   var body: some View {
@@ -6299,7 +6299,7 @@ private struct MessageDetailsView: View {
 }
 
 private struct MessageContextMenu: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   let message: MessageItem
 
   var body: some View {
@@ -6320,7 +6320,7 @@ private struct MessageContextMenu: View {
 }
 
 private struct ComposerView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   @State private var isAttachmentTargeted = false
 
   var body: some View {
@@ -6463,7 +6463,7 @@ private struct TransportMiniToggle: View {
 }
 
 private struct ContactInspectorView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   @State private var simpleXAddressVisible = false
 
   var body: some View {
@@ -6567,7 +6567,7 @@ private struct ContactInspectorView: View {
 }
 
 private struct ThreadTimelineHeader: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
   let thread: ThreadItem
   let subtitle: String
   let contactInfoVisible: Bool
@@ -6658,7 +6658,7 @@ private struct TransportPill: View {
 }
 
 private struct SettingsView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
 
   var body: some View {
     TabView {
@@ -7028,7 +7028,7 @@ private struct RemoteStatusPill: View {
 }
 
 private struct TLSSetupWalkthroughView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
 
   private var domainText: String {
     let draft = session.settingsDomainDraft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -7268,7 +7268,7 @@ private struct TLSDNSRecordRow: View {
 }
 
 private struct RemoteServerWalkthroughView: View {
-  @EnvironmentObject private var session: OwlSession
+  @EnvironmentObject private var session: StellarSession
 
   private var targetState: SetupStepState {
     session.remoteDraftConfigured && session.remotePortDraftValid ? .complete : .active
@@ -7380,7 +7380,7 @@ private struct RemoteServerWalkthroughView: View {
       RemoteSetupStep(
         number: 3,
         title: "Deploy And Verify",
-        detail: session.snapshot.settings.remote.last_deploy_message.isEmpty ? "Install Owl on the server, then verify receiver health." : session.snapshot.settings.remote.last_deploy_message,
+        detail: session.snapshot.settings.remote.last_deploy_message.isEmpty ? "Install Stellar on the server, then verify receiver health." : session.snapshot.settings.remote.last_deploy_message,
         state: deployState
       ) {
         VStack(alignment: .leading, spacing: 8) {
@@ -7406,7 +7406,7 @@ private struct RemoteServerWalkthroughView: View {
       RemoteSetupStep(
         number: 4,
         title: "Test And Sync",
-        detail: session.snapshot.settings.remote.last_test_message.isEmpty ? "Send a test email and pull remote mail into local Owl." : session.snapshot.settings.remote.last_test_message,
+        detail: session.snapshot.settings.remote.last_test_message.isEmpty ? "Send a test email and pull remote mail into local Stellar." : session.snapshot.settings.remote.last_test_message,
         state: testState
       ) {
         VStack(alignment: .leading, spacing: 8) {
