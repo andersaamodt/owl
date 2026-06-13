@@ -9,6 +9,18 @@ Stellar is early software. The repository currently builds native macOS, Linux,
 Android, and iOS targets, with Android direct distribution as the simplest
 mobile path.
 
+## Theurgy Status
+
+Stellar now carries a first-phase Theurgy project contract in
+`theurgy.project.toml`.
+
+- The durable truth remains file-first.
+- The current backend remains `scripts/stellar-backend.sh`.
+- Theurgy is the contract and runtime-staging boundary, not a mandate to rewrite
+  the whole backend at once.
+- The next migration target should be typed runtime contracts for snapshot,
+  status, settings controls, and long-running transport operations.
+
 ## What Stellar Does
 
 - Shows email and SimpleX-style secure messages in the same contact timeline.
