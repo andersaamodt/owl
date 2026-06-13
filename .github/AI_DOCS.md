@@ -22,6 +22,7 @@
 - Generated native hosts for macOS, Linux, Android, and iOS are intentional.
 - Python may appear in supporting validation or generation surfaces outside the hot user path; keep those boundaries explicit if they grow.
 - Do not add ad hoc repo-local runtime state, logs, caches, or temp homes.
+- Generated host output belongs under `${XDG_STATE_HOME:-$HOME/.local/state}/stellar/generated` for desktop and `${XDG_STATE_HOME:-$HOME/.local/state}/stellar-mobile/generated/mobile` for mobile, not under repo-local `generated/` paths.
 
 ## Theurgy Guidance
 

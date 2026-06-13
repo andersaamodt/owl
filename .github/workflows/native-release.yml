@@ -39,14 +39,16 @@ jobs:
       - name: Generate desktop targets
         run: sh scripts/render-native-desktop.sh
       - name: Build release executable
-        working-directory: generated/macos
-        run: swift build -c release
+        run: |
+          set -eu
+          cd "$HOME/.local/state/stellar/generated/macos"
+          swift build -c release
       - name: Package app bundle
         run: |
           set -eu
           app_dir="dist/Stellar.app"
           mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources/scripts"
-          cp generated/macos/.build/release/stellar "$app_dir/Contents/MacOS/Stellar"
+          cp "$HOME/.local/state/stellar/generated/macos/.build/release/stellar" "$app_dir/Contents/MacOS/Stellar"
           cp scripts/stellar-backend.sh "$app_dir/Contents/Resources/scripts/"
           cp scripts/stellar-simplex-local-hook.sh "$app_dir/Contents/Resources/scripts/"
           cp scripts/stellar-secure-chat-hook.sh "$app_dir/Contents/Resources/scripts/"
@@ -94,14 +96,15 @@ jobs:
       - name: Build Linux executable
         run: |
           set -eu
-          meson setup generated/linux/build generated/linux --buildtype=release
-          meson compile -C generated/linux/build
+          generated_root="$HOME/.local/state/stellar/generated/linux"
+          meson setup "$generated_root/build" "$generated_root" --buildtype=release
+          meson compile -C "$generated_root/build"
       - name: Package Linux bundle
         run: |
           set -eu
           bundle="dist/stellar-linux-x86_64"
           mkdir -p "$bundle/scripts"
-          cp generated/linux/build/stellar "$bundle/stellar"
+          cp "$HOME/.local/state/stellar/generated/linux/build/stellar" "$bundle/stellar"
           cp scripts/stellar-backend.sh "$bundle/scripts/"
           cp scripts/stellar-simplex-local-hook.sh "$bundle/scripts/"
           cp scripts/stellar-secure-chat-hook.sh "$bundle/scripts/"
@@ -131,21 +134,26 @@ jobs:
         working-directory: stellar-mobile
         run: sh scripts/render-native-mobile.sh
       - name: Build APK and release bundle
-        working-directory: stellar-mobile/generated/mobile/android
         env:
           ANDROID_SIGNING_KEYSTORE_BASE64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}
           ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
           ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
           ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
-        run: gradle --no-daemon assembleDebug bundleRelease
+        run: |
+          set -eu
+          cd "$HOME/.local/state/stellar-mobile/generated/mobile/android"
+          gradle --no-daemon assembleDebug bundleRelease
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/dist/stellar-android-debug.apk"
+          cp app/build/outputs/bundle/release/app-release.aab "$GITHUB_WORKSPACE/dist/stellar-android-release.aab"
       - uses: actions/upload-artifact@v4
         with:
           name: stellar-android-debug-apk
-          path: stellar-mobile/generated/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          path: dist/stellar-android-debug.apk
       - uses: actions/upload-artifact@v4
         with:
           name: stellar-android-release-aab
-          path: stellar-mobile/generated/mobile/android/app/build/outputs/bundle/release/app-release.aab
+          path: dist/stellar-android-release.aab
 
   play-upload:
     name: Google Play Draft Upload
@@ -176,17 +184,19 @@ jobs:
         working-directory: stellar-mobile
         run: sh scripts/render-native-mobile.sh
       - name: Generate Xcode project
-        working-directory: stellar-mobile/generated/mobile/ios
-        run: xcodegen generate --spec project.yml
-      - name: Validate Xcode project
-        working-directory: stellar-mobile/generated/mobile/ios
         run: |
           set -eu
+          cd "$HOME/.local/state/stellar-mobile/generated/mobile/ios"
+          xcodegen generate --spec project.yml
+      - name: Validate Xcode project
+        run: |
+          set -eu
+          cd "$HOME/.local/state/stellar-mobile/generated/mobile/ios"
           xcodebuild -list -project stellar-mobile.xcodeproj
       - name: Build unsigned simulator app
-        working-directory: stellar-mobile/generated/mobile/ios
         run: |
           set -eu
+          cd "$HOME/.local/state/stellar-mobile/generated/mobile/ios"
           xcodebuild \
             -project stellar-mobile.xcodeproj \
             -scheme stellar \
@@ -196,9 +206,9 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
       - name: Package generated iOS project
-        working-directory: stellar-mobile/generated/mobile/ios
         run: |
           set -eu
+          cd "$HOME/.local/state/stellar-mobile/generated/mobile/ios"
           mkdir -p "$GITHUB_WORKSPACE/dist"
           ditto -c -k --keepParent stellar-mobile.xcodeproj "$GITHUB_WORKSPACE/dist/stellar-ios-project.zip"
           app_path=$(find build/DerivedData/Build/Products/Release-iphonesimulator -maxdepth 1 -type d -name '*.app' | head -n 1)

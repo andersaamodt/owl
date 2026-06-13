@@ -15,6 +15,7 @@ DerivedData/
 *.xcarchive
 *.keystore
 *.jks
+generated/
 stellar-mobile/generated/mobile/android/.gradle/
 stellar-mobile/generated/mobile/android/app/build/
 stellar-mobile/generated/mobile/ios/*.xcodeproj/

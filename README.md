@@ -79,6 +79,10 @@ sh scripts/render-native-desktop.sh
 sh scripts/validate-native-desktop-ir.sh
 ```
 
+Desktop generated native host output is operator-local build material and now
+lives under `${XDG_STATE_HOME:-$HOME/.local/state}/stellar/generated`, not in
+repo-local `generated/`.
+
 Generate and validate mobile targets:
 
 ```sh

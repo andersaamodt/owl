@@ -4,9 +4,11 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
 project_dir=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+. "$script_dir/stellar-paths.sh"
 ir_path="$project_dir/app-blueprint/app.ir.yaml"
 schema_path="$project_dir/schemas/native-desktop-ir-v1.json"
-generated_root="$project_dir/generated"
+generated_root=$(stellar_generated_root)
+legacy_generated_root="$project_dir/generated"
 macos_dir="$generated_root/macos"
 linux_dir="$generated_root/linux"
 template_root="$project_dir/templates"
@@ -25,6 +27,15 @@ else
 fi
 pretty_ir=$(jq '.' "$ir_path")
 linux_ir_literal=$(printf '%s\n' "$pretty_ir" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/  "/; s/$/\\n"/')
+
+if [ -d "$legacy_generated_root" ]; then
+  if [ ! -e "$generated_root" ]; then
+    mkdir -p "$(dirname "$generated_root")"
+    mv "$legacy_generated_root" "$generated_root"
+  else
+    rm -rf "$legacy_generated_root"
+  fi
+fi
 
 mkdir -p "$macos_dir/Sources/App" "$linux_dir/src"
 
