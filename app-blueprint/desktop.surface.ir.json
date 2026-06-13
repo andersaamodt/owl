@@ -1,0 +1,62 @@
+{
+  "version": "theurgy-desktop-surface-ir/v1",
+  "format": "json",
+  "product": "stellar",
+  "target": "desktop",
+  "actions": [
+    "refresh_state",
+    "get_overview",
+    "get_settings_controls",
+    "settings_set_test_recipient",
+    "settings_verify_domain",
+    "settings_set_domain",
+    "settings_remote_set_target",
+    "settings_remote_set_auth",
+    "settings_remote_deploy",
+    "settings_remote_verify",
+    "settings_remote_send_test",
+    "settings_remote_sync",
+    "install_simplex_cli",
+    "provision_simplex_identity",
+    "configure_simplex_local_transport",
+    "configure_secure_chat_transport",
+    "simplex_transport_status",
+    "tick_simplex"
+  ],
+  "capabilities": [
+    "timeline-snapshot",
+    "settings-controls",
+    "remote-mail-server-setup",
+    "transport-operation-history",
+    "shell-backend-compatibility"
+  ],
+  "window": {
+    "id": "window.main",
+    "type": "Window",
+    "title": "Stellar",
+    "role": "native-product-root",
+    "targets": ["macos", "linux"],
+    "child": {
+      "id": "split.messenger",
+      "type": "SplitPane",
+      "role": "left-list-detail",
+      "children": [
+        {
+          "id": "sidebar.contacts",
+          "type": "Sidebar",
+          "role": "thread-sidebar"
+        },
+        {
+          "id": "detail.timeline",
+          "type": "Detail",
+          "role": "timeline-detail"
+        }
+      ]
+    },
+    "statusBar": {
+      "id": "statusbar.main",
+      "type": "StatusBar",
+      "role": "transport-status"
+    }
+  }
+}

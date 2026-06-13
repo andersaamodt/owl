@@ -1,0 +1,310 @@
+{
+  "version": "theurgy-product-ir/v1",
+  "format": "json",
+  "app": {
+    "id": "stellar",
+    "name": "Stellar",
+    "targets": ["macos", "linux"],
+    "capabilities": [
+      "native-desktop",
+      "typed-runtime-actions",
+      "mail-root-file-first",
+      "secure-chat-transport-bridge"
+    ],
+    "permissions": ["files", "network", "process-control"]
+  },
+  "domain": {
+    "objects": [
+      { "id": "thread", "label": "Thread", "source": "stellar-backend snapshot" },
+      { "id": "message", "label": "Message", "source": "stellar-backend snapshot" },
+      { "id": "contact", "label": "Contact", "source": "stellar-backend snapshot" },
+      { "id": "transport_operation", "label": "Transport Operation", "source": "theurgy runtime operation history" }
+    ]
+  },
+  "state": {
+    "snapshotSchema": "stellar-state/v1",
+    "command": ["scripts/stellar-runtime-state.sh"],
+    "statusCommand": ["scripts/stellar-runtime-status.sh"],
+    "roots": [
+      {
+        "id": "mail-root",
+        "kind": "user-home-default",
+        "path": "~/mail"
+      },
+      {
+        "id": "theurgy-runtime-state",
+        "kind": "xdg-state",
+        "path": "${XDG_STATE_HOME:-$HOME/.local/state}/stellar/theurgy-runtime"
+      }
+    ],
+    "projections": [
+      "mailboxes",
+      "threads",
+      "messages",
+      "drafts",
+      "events",
+      "settings",
+      "transport_status"
+    ]
+  },
+  "actions": [
+    {
+      "id": "refresh_state",
+      "label": "Refresh",
+      "input": { "mail_root": "string?" },
+      "output": { "snapshot": "object" },
+      "effect": "read",
+      "failure": { "error": "string" },
+      "safe": true,
+      "mutating": false,
+      "longRunning": false,
+      "privileged": false,
+      "command": ["scripts/stellar-runtime-action.sh", "refresh_state", "<json>"]
+    },
+    {
+      "id": "get_overview",
+      "label": "Overview",
+      "input": { "mail_root": "string?" },
+      "output": { "overview": "object" },
+      "effect": "read",
+      "failure": { "error": "string" },
+      "safe": true,
+      "mutating": false,
+      "longRunning": false,
+      "privileged": false,
+      "command": ["scripts/stellar-runtime-action.sh", "get_overview", "<json>"]
+    },
+    {
+      "id": "get_settings_controls",
+      "label": "Settings Controls",
+      "input": { "mail_root": "string?" },
+      "output": { "settings": "object" },
+      "effect": "read",
+      "failure": { "error": "string" },
+      "safe": true,
+      "mutating": false,
+      "longRunning": false,
+      "privileged": false,
+      "command": ["scripts/stellar-runtime-action.sh", "get_settings_controls", "<json>"]
+    },
+    {
+      "id": "settings_set_test_recipient",
+      "label": "Set Test Recipient",
+      "input": { "mail_root": "string?", "address": "string" },
+      "output": { "result": "object" },
+      "effect": "write",
+      "failure": { "error": "string" },
+      "safe": false,
+      "mutating": true,
+      "longRunning": false,
+      "privileged": false,
+      "command": ["scripts/stellar-runtime-action.sh", "settings_set_test_recipient", "<json>"]
+    },
+    {
+      "id": "settings_verify_domain",
+      "label": "Verify Domain",
+      "input": { "mail_root": "string?", "domain": "string" },
+      "output": { "result": "object" },
+      "effect": "external",
+      "failure": { "error": "string" },
+      "safe": false,
+      "mutating": true,
+      "longRunning": true,
+      "privileged": false,
+      "command": ["scripts/stellar-runtime-action.sh", "settings_verify_domain", "<json>"]
+    },
+    {
+      "id": "settings_set_domain",
+      "label": "Set Domain",
+      "input": { "mail_root": "string?", "domain": "string" },
+      "output": { "result": "object" },
+      "effect": "write",
+      "failure": { "error": "string" },
+      "safe": false,
+      "mutating": true,
+      "longRunning": false,
+      "privileged": false,
+      "command": ["scripts/stellar-runtime-action.sh", "settings_set_domain", "<json>"]
+    },
+    {
+      "id": "settings_remote_set_target",
+      "label": "Save Remote Target",
+      "input": { "mail_root": "string?", "host": "string", "ssh_key_path": "string", "ssh_port": "string?" },
+      "output": { "result": "object" },
+      "effect": "write",
+      "failure": { "error": "string" },
+      "safe": false,
+      "mutating": true,
+      "longRunning": true,
+      "privileged": true,
+      "command": ["scripts/stellar-runtime-action.sh", "settings_remote_set_target", "<json>"]
+    },
+    {
+      "id": "settings_remote_set_auth",
+      "label": "Save Remote Auth",
+      "input": {
+        "mail_root": "string?",
+        "ssh_key_has_password": "string",
+        "ssh_key_save_choice": "string",
+        "ssh_key_password": "string",
+        "host": "string?",
+        "ssh_key_path": "string?",
+        "ssh_port": "string?"
+      },
+      "output": { "result": "object" },
+      "effect": "write",
+      "failure": { "error": "string" },
+      "safe": false,
+      "mutating": true,
+      "longRunning": true,
+      "privileged": true,
+      "command": ["scripts/stellar-runtime-action.sh", "settings_remote_set_auth", "<json>"]
+    },
+    {
+      "id": "settings_remote_deploy",
+      "label": "Deploy Remote Server",
+      "input": { "mail_root": "string?", "host": "string?", "ssh_key_path": "string?", "ssh_key_password": "string?", "ssh_port": "string?" },
+      "output": { "result": "object" },
+      "effect": "external",
+      "failure": { "error": "string" },
+      "safe": false,
+      "mutating": true,
+      "longRunning": true,
+      "privileged": true,
+      "command": ["scripts/stellar-runtime-action.sh", "settings_remote_deploy", "<json>"]
+    },
+    {
+      "id": "settings_remote_verify",
+      "label": "Verify Remote Server",
+      "input": { "mail_root": "string?", "host": "string?", "ssh_key_path": "string?", "ssh_key_password": "string?", "ssh_port": "string?" },
+      "output": { "result": "object" },
+      "effect": "external",
+      "failure": { "error": "string" },
+      "safe": false,
+      "mutating": true,
+      "longRunning": true,
+      "privileged": true,
+      "command": ["scripts/stellar-runtime-action.sh", "settings_remote_verify", "<json>"]
+    },
+    {
+      "id": "settings_remote_send_test",
+      "label": "Send Test Message",
+      "input": { "mail_root": "string?", "host": "string?", "ssh_key_path": "string?", "ssh_key_password": "string?", "ssh_port": "string?" },
+      "output": { "result": "object" },
+      "effect": "external",
+      "failure": { "error": "string" },
+      "safe": false,
+      "mutating": true,
+      "longRunning": true,
+      "privileged": true,
+      "command": ["scripts/stellar-runtime-action.sh", "settings_remote_send_test", "<json>"]
+    },
+    {
+      "id": "settings_remote_sync",
+      "label": "Sync Remote Mail",
+      "input": { "mail_root": "string?", "host": "string?", "ssh_key_path": "string?", "ssh_key_password": "string?", "ssh_port": "string?" },
+      "output": { "result": "object" },
+      "effect": "external",
+      "failure": { "error": "string" },
+      "safe": false,
+      "mutating": true,
+      "longRunning": true,
+      "privileged": true,
+      "command": ["scripts/stellar-runtime-action.sh", "settings_remote_sync", "<json>"]
+    },
+    {
+      "id": "install_simplex_cli",
+      "label": "Install SimpleX CLI",
+      "input": { "mail_root": "string?" },
+      "output": { "result": "object" },
+      "effect": "external",
+      "failure": { "error": "string" },
+      "safe": false,
+      "mutating": true,
+      "longRunning": true,
+      "privileged": false,
+      "command": ["scripts/stellar-runtime-action.sh", "install_simplex_cli", "<json>"]
+    },
+    {
+      "id": "provision_simplex_identity",
+      "label": "Provision SimpleX Identity",
+      "input": { "mail_root": "string?", "identity": "string?", "display_name": "string?", "full_name": "string?" },
+      "output": { "result": "object" },
+      "effect": "write",
+      "failure": { "error": "string" },
+      "safe": false,
+      "mutating": true,
+      "longRunning": true,
+      "privileged": false,
+      "command": ["scripts/stellar-runtime-action.sh", "provision_simplex_identity", "<json>"]
+    },
+    {
+      "id": "configure_simplex_local_transport",
+      "label": "Enable Local SimpleX Transport",
+      "input": { "mail_root": "string?", "identity": "string?" },
+      "output": { "result": "object" },
+      "effect": "write",
+      "failure": { "error": "string" },
+      "safe": false,
+      "mutating": true,
+      "longRunning": true,
+      "privileged": false,
+      "command": ["scripts/stellar-runtime-action.sh", "configure_simplex_local_transport", "<json>"]
+    },
+    {
+      "id": "configure_secure_chat_transport",
+      "label": "Configure Secure Chat Transport",
+      "input": { "mail_root": "string?", "identity": "string?", "ssh_host": "string?", "export_command": "string?", "send_command": "string?" },
+      "output": { "result": "object" },
+      "effect": "write",
+      "failure": { "error": "string" },
+      "safe": false,
+      "mutating": true,
+      "longRunning": true,
+      "privileged": true,
+      "command": ["scripts/stellar-runtime-action.sh", "configure_secure_chat_transport", "<json>"]
+    },
+    {
+      "id": "simplex_transport_status",
+      "label": "SimpleX Transport Status",
+      "input": { "mail_root": "string?", "identity": "string?" },
+      "output": { "result": "object" },
+      "effect": "read",
+      "failure": { "error": "string" },
+      "safe": true,
+      "mutating": false,
+      "longRunning": false,
+      "privileged": false,
+      "command": ["scripts/stellar-runtime-action.sh", "simplex_transport_status", "<json>"]
+    },
+    {
+      "id": "tick_simplex",
+      "label": "Check SimpleX",
+      "input": { "mail_root": "string?" },
+      "output": { "result": "object" },
+      "effect": "external",
+      "failure": { "error": "string" },
+      "safe": false,
+      "mutating": true,
+      "longRunning": true,
+      "privileged": false,
+      "command": ["scripts/stellar-runtime-action.sh", "tick_simplex", "<json>"]
+    }
+  ],
+  "releaseTargets": [
+    { "id": "macos-native", "target": "macos", "surface": "desktop", "artifact": "generated/macos" },
+    { "id": "linux-native", "target": "linux", "surface": "desktop", "artifact": "generated/linux" }
+  ],
+  "persistence": {
+    "truth": "mail-root-file-first",
+    "database": "none",
+    "history": "append-only-operation-logs"
+  },
+  "audit": {
+    "operationHistory": true,
+    "cliParity": true
+  },
+  "surfaces": {
+    "desktop": "app-blueprint/desktop.surface.ir.json"
+  }
+}

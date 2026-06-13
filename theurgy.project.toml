@@ -6,8 +6,11 @@ source_root = "app-blueprint"
 truth = "file-first"
 native_ir = "app-blueprint/app.ir.yaml"
 desktop_targets = ["macos", "linux"]
+product_ir = "app-blueprint/product.ir.json"
+desktop_surface_ir = "app-blueprint/desktop.surface.ir.json"
+runtime_manifest = "app-blueprint/runtime.manifest.json"
 mobile_workspace = "stellar-mobile"
-license = "OWL-3.1"
+license = "LicenseRef-OWL-3.1 OR AGPL-3.0-or-later"
 
 [core]
 binary = "scripts/stellar-backend.sh"

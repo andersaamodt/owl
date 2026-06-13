@@ -18,4 +18,8 @@ if [ -f "$test_dir/test-native-mobile.sh" ]; then
   sh "$test_dir/test-native-mobile.sh"
 fi
 
+if [ -f "$test_dir/test-theurgy-contract.sh" ]; then
+  sh "$test_dir/test-theurgy-contract.sh"
+fi
+
 printf '%s\n' "native test suite passed"

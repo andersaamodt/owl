@@ -1,0 +1,22 @@
+{
+  "version": "theurgy-runtime-manifest/v1",
+  "app": "stellar",
+  "productIr": "app-blueprint/product.ir.json",
+  "runtime": {
+    "stateCommand": ["scripts/stellar-runtime-state.sh"],
+    "statusCommand": ["scripts/stellar-runtime-status.sh"],
+    "subscribeStatusCommand": ["scripts/stellar-runtime-status.sh"],
+    "operationStatusCommand": ["scripts/stellar-runtime-operation-status.sh"],
+    "actionCommand": ["scripts/stellar-runtime-action.sh"],
+    "historyCommand": ["scripts/stellar-runtime-history.sh"],
+    "protocol": "theurgy-runtime-action/v1"
+  },
+  "surfaces": {
+    "desktop": "app-blueprint/desktop.surface.ir.json",
+    "legacyNativeDesktop": "app-blueprint/app.ir.yaml"
+  },
+  "compatibility": {
+    "wizardryAppsShellFirstStillSupported": true,
+    "theurgyRequiredForLegacyWizardryApps": false
+  }
+}

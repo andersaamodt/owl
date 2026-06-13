@@ -18,8 +18,12 @@ Stellar now carries a first-phase Theurgy project contract in
 - The current backend remains `scripts/stellar-backend.sh`.
 - Theurgy is the contract and runtime-staging boundary, not a mandate to rewrite
   the whole backend at once.
-- The next migration target should be typed runtime contracts for snapshot,
-  status, settings controls, and long-running transport operations.
+- The repo now also carries typed runtime contracts for snapshot, status,
+  settings controls, and long-running transport operations in:
+  - `app-blueprint/product.ir.json`
+  - `app-blueprint/desktop.surface.ir.json`
+  - `app-blueprint/runtime.manifest.json`
+  - `scripts/stellar-runtime-*.sh`
 
 ## What Stellar Does
 
