@@ -2,7 +2,7 @@
 
 Stellar Mobile is the Android/iOS native-mobile workspace for Stellar. The
 canonical mobile UI is [app-blueprint/mobile.ir.yaml](app-blueprint/mobile.ir.yaml), which generates
-plain Android and SwiftUI iOS projects under [generated/mobile](generated/mobile).
+plain Android and SwiftUI iOS projects under `${XDG_STATE_HOME:-$HOME/.local/state}/stellar-mobile/generated/mobile`.
 
 Android is direct-distribution first. Play upload is optional and is not required
 for local builds or release artifacts.

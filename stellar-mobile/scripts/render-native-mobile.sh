@@ -6,10 +6,8 @@ script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
 project_dir=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
 ir_path="$project_dir/app-blueprint/mobile.ir.yaml"
 schema_path="$project_dir/schemas/native-mobile-ir-v1.json"
-generated_root="$project_dir/generated/mobile"
-android_dir="$generated_root/android"
-ios_dir="$generated_root/ios"
 version_file="$project_dir/VERSION"
+legacy_generated_root="$project_dir/generated/mobile"
 
 "$script_dir/validate-native-mobile-ir.sh" "$ir_path" "$schema_path" >/dev/null
 
@@ -24,6 +22,10 @@ android_target_sdk=$(jq -r '.app.android.targetSdk // 35' "$ir_path")
 ios_bundle=$(jq -r '.app.ios.bundleId // ""' "$ir_path")
 [ -n "$ios_bundle" ] || ios_bundle="app.wizardry.generated.$package_part"
 ios_deployment_target=$(jq -r '.app.ios.deploymentTarget // "16.0"' "$ir_path")
+state_root="${XDG_STATE_HOME:-$HOME/.local/state}/$app_id"
+generated_root="$state_root/generated/mobile"
+android_dir="$generated_root/android"
+ios_dir="$generated_root/ios"
 if [ -f "$version_file" ]; then
   app_version=$(tr -d ' \t\r\n' <"$version_file")
 else
@@ -40,6 +42,15 @@ if [ -z "$version_code" ]; then
   version_code=$(printf '%s' "$app_version" | cksum | awk '{ print ($1 % 2000000000) + 1 }')
 fi
 [ -n "$version_code" ] || version_code=1
+
+mkdir -p "$state_root/generated"
+if [ -d "$legacy_generated_root" ]; then
+  if [ ! -e "$generated_root" ]; then
+    mv "$legacy_generated_root" "$generated_root"
+  else
+    rm -rf "$legacy_generated_root"
+  fi
+fi
 
 mkdir -p "$android_dir/app/src/main/java/app/wizardry/generated/$package_part" "$ios_dir/Host"
 
