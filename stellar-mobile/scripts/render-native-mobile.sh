@@ -7,12 +7,15 @@ project_dir=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
 ir_path="$project_dir/app-blueprint/mobile.ir.yaml"
 schema_path="$project_dir/schemas/native-mobile-ir-v1.json"
 version_file="$project_dir/VERSION"
+workspace_conf="$project_dir/wizardry.workspace.conf"
 legacy_generated_root="$project_dir/generated/mobile"
 
 "$script_dir/validate-native-mobile-ir.sh" "$ir_path" "$schema_path" >/dev/null
 
 app_name=$(jq -r '.app.name' "$ir_path")
 app_id=$(jq -r '.app.id' "$ir_path")
+project_id=$(awk -F= '$1 == "project_id" { print $2; exit }' "$workspace_conf")
+[ -n "$project_id" ] || project_id=$(basename "$project_dir")
 package_part=$(printf '%s' "$app_id" | tr '-' '_')
 android_package=$(jq -r '.app.android.applicationId // ""' "$ir_path")
 [ -n "$android_package" ] || android_package="app.wizardry.generated.$package_part"
@@ -22,7 +25,8 @@ android_target_sdk=$(jq -r '.app.android.targetSdk // 35' "$ir_path")
 ios_bundle=$(jq -r '.app.ios.bundleId // ""' "$ir_path")
 [ -n "$ios_bundle" ] || ios_bundle="app.wizardry.generated.$package_part"
 ios_deployment_target=$(jq -r '.app.ios.deploymentTarget // "16.0"' "$ir_path")
-state_root="${XDG_STATE_HOME:-$HOME/.local/state}/$app_id"
+state_root="${XDG_STATE_HOME:-$HOME/.local/state}/$project_id"
+legacy_state_generated_root="${XDG_STATE_HOME:-$HOME/.local/state}/$app_id/generated/mobile"
 generated_root="$state_root/generated/mobile"
 android_dir="$generated_root/android"
 ios_dir="$generated_root/ios"
@@ -49,6 +53,13 @@ if [ -d "$legacy_generated_root" ]; then
     mv "$legacy_generated_root" "$generated_root"
   else
     rm -rf "$legacy_generated_root"
+  fi
+fi
+if [ "$legacy_state_generated_root" != "$generated_root" ] && [ -d "$legacy_state_generated_root" ]; then
+  if [ ! -e "$generated_root" ]; then
+    mv "$legacy_state_generated_root" "$generated_root"
+  else
+    rm -rf "$legacy_state_generated_root"
   fi
 fi
 
