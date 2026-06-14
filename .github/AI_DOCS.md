@@ -1,42 +1,66 @@
 # Stellar AI Notes
 
-- Stellar is in a first-phase Theurgy posture.
-- `theurgy.project.toml` is the explicit contract boundary for the native desktop app.
-- The current backend remains `scripts/stellar-backend.sh`; do not treat that as accidental drift.
-- The right migration shape is narrow and staged: typed runtime contracts first, then isolated high-value backend slices, not a wholesale rewrite.
+## Upstream Standards
+- Read the repository README first.
+- Read `/Users/andersaamodt/git/phronesis/standards/` for cross-repo policy.
+- Read theurgy docs where Stellar depends on that generation and runtime-contract layer.
 
-## Durable State
+## Local Exception Ledger
 
-- Canonical mail data root defaults to `~/mail`.
-- Stellar metadata lives under `ROOT/.stellar`.
-- SimpleX runtime state lives under:
-  - `ROOT/.stellar/simplex`
-  - `ROOT/.system/simplex`
-  - `ROOT/.transport/simplex`
-- Desktop UI prefs currently live at `${XDG_CONFIG_HOME:-$HOME/.config}/wizardry-apps/stellar`.
-- If that config path changes later, use migration-on-read or startup migration; do not strand existing data.
+### Language Boundaries
+- POSIX sh: primary backend orchestration and transport control in `scripts/stellar-backend.sh`.
+- Python: current backend helper snippets remain present and are removal-default unless explicitly re-approved during fix-it.
+- Rust: none.
+- C: generated native Linux output only.
+- C++: none.
+- Native/generated: generated native hosts for macOS, Linux, Android, and iOS are intentional.
+- Other: Swift is intrinsic to macOS and iOS targets; mobile or desktop generated surfaces remain explicit native boundaries.
 
-## Current Exception Boundaries
+### Storage Roots
+- Primary durable app data: `~/mail`
+- Config: transport and metadata under `ROOT/.stellar`, `ROOT/.system/simplex`, and `ROOT/.transport/simplex`
+- Cache: app-owned or transport-owned mail-root state only
+- Logs: app-owned mail-root state only
+- Temp/scratch: `${XDG_STATE_HOME:-$HOME/.local/state}/stellar/generated` and `${XDG_STATE_HOME:-$HOME/.local/state}/stellar-mobile/generated/mobile`
 
-- POSIX shell remains the primary backend orchestration layer.
-- Generated native hosts for macOS, Linux, Android, and iOS are intentional.
-- Python may appear in supporting validation or generation surfaces outside the hot user path; keep those boundaries explicit if they grow.
-- Do not add ad hoc repo-local runtime state, logs, caches, or temp homes.
-- Generated host output belongs under `${XDG_STATE_HOME:-$HOME/.local/state}/stellar/generated` for desktop and `${XDG_STATE_HOME:-$HOME/.local/state}/stellar-mobile/generated/mobile` for mobile, not under repo-local `generated/` paths.
+### Durable File Formats
+- User-facing editable files: plain-text file-first corpus and settings files
+- App-facing machine state: plain text and structured transport files
+- Append-only logs: plain text where present
+- Opaque formats and justification: mobile and desktop native artifacts are derived outputs only
 
-## Theurgy Guidance
+### Theme System
+- Classification: app-local native styling
+- Catalog source: native app contract
+- Ordering: local contract
+- Keyboard contract: native controls own their keyboard behavior
+- Persistence: current desktop UI prefs still live at `${XDG_CONFIG_HOME:-$HOME/.config}/wizardry-apps/stellar`, which remains an explicit storage exception
+- Depth contract: keep native shells visually coherent without claiming shared wizardry-theme usage unless that becomes explicit
 
-- Prefer using Theurgy to own:
-  - typed runtime manifests
-  - native adapter compilation/staging
-  - long-running transport and sync operation status
-  - mobile/desktop runtime request envelopes
-- Do not move mail storage, message history, or transport truth out of plain files unless a real scale or transactional need forces it.
-- Treat `scripts/stellar-backend.sh` as the compatibility backend until a typed runtime bridge replaces specific actions.
+### Runtime And Bridge Ownership
+- Backend action surface: `scripts/stellar-backend.sh` plus typed runtime contract scripts
+- Backend path resolution owner: theurgy or native-host and backend contracts
+- Shell-fragment policy: explicit backend actions only
+- Native/generated boundary: generated native desktop and mobile shells around a shell backend and typed runtime contracts
 
-## Migration Priority
+### Tests
+- Test entrypoints under `.tests/`: yes
+- Backend contract coverage: yes
+- UI/static/native-shell coverage: yes
+- Known gaps: current Python helper snippets should be removed or replaced; the desktop UI prefs path remains a documented storage exception
 
-1. Add Product IR, desktop/mobile surface IR, and runtime manifest contracts that describe the current app honestly.
-2. Move status, snapshot, and settings-control actions behind a typed runtime request path.
-3. Migrate long-running remote setup, sync, and transport operations with explicit operation-status/history contracts.
-4. Only then consider deeper backend decomposition.
+### Release, Build, Generated Output, And Cruft
+- Release artifact root: operator-local release outputs only
+- Build output root: `${XDG_STATE_HOME:-$HOME/.local/state}/stellar/generated` and `${XDG_STATE_HOME:-$HOME/.local/state}/stellar-mobile/generated/mobile`
+- Generated source roots: operator-local native output only
+- Disposable cruft roots: no runtime state, logs, caches, or temp homes belong in the repo
+- Repo-local generated fixtures: test fixtures and typed contract artifacts only
+
+### Approved Exceptions
+- Generated macOS, Linux, Android, and iOS native hosts are intentional.
+- `~/mail` as the canonical durable root is intentional.
+
+### Pending Decisions
+- Remove the retained Python backend helper snippets unless a narrow subset is explicitly re-approved.
+- Decide whether desktop UI prefs stay in the XDG config root or migrate fully into the `~/mail`-owned Stellar contract.
+- Continue moving status, snapshot, settings-control, and long-running transport operations behind typed runtime request paths.
