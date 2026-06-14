@@ -9,7 +9,7 @@
 
 ### Language Boundaries
 - POSIX sh: primary backend orchestration and transport control in `scripts/stellar-backend.sh`.
-- Python: current backend helper snippets remain present and are removal-default unless explicitly re-approved during fix-it.
+- Python: none in the maintained runtime after the current fix-it cleanup.
 - Rust: none.
 - C: generated native Linux output only.
 - C++: none.
@@ -47,7 +47,7 @@
 - Test entrypoints under `.tests/`: yes
 - Backend contract coverage: yes
 - UI/static/native-shell coverage: yes
-- Known gaps: current Python helper snippets should be removed or replaced; the desktop UI prefs path remains a documented storage exception
+- Known gaps: the desktop UI prefs path remains a documented storage exception
 
 ### Release, Build, Generated Output, And Cruft
 - Release artifact root: operator-local release outputs only
@@ -61,6 +61,5 @@
 - `~/mail` as the canonical durable root is intentional.
 
 ### Pending Decisions
-- Remove the retained Python backend helper snippets unless a narrow subset is explicitly re-approved.
 - Decide whether desktop UI prefs stay in the XDG config root or migrate fully into the `~/mail`-owned Stellar contract.
 - Continue moving status, snapshot, settings-control, and long-running transport operations behind typed runtime request paths.
