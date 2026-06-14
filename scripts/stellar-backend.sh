@@ -519,10 +519,13 @@ stellar_backend_json() {
   fi
   tmp_out=$(mktemp "${TMPDIR:-/tmp}/stellar-stellar-out.XXXXXX")
   tmp_err=$(mktemp "${TMPDIR:-/tmp}/stellar-stellar-err.XXXXXX")
+  timeout_marker=$(mktemp "${TMPDIR:-/tmp}/stellar-stellar-timeout.XXXXXX")
+  rm -f "$timeout_marker"
   sh "$script" "$stellar_action" "$ROOT" "$@" >"$tmp_out" 2>"$tmp_err" &
   backend_pid=$!
   (
     sleep "$timeout_seconds"
+    printf 'timeout\n' >"$timeout_marker"
     kill "$backend_pid" >/dev/null 2>&1 || true
   ) &
   killer_pid=$!
@@ -535,7 +538,10 @@ stellar_backend_json() {
   wait "$killer_pid" 2>/dev/null || true
   cat "$tmp_out"
   cat "$tmp_err" >&2
-  rm -f "$tmp_out" "$tmp_err"
+  if [ -f "$timeout_marker" ] && [ "$backend_status" -ne 0 ]; then
+    backend_status=124
+  fi
+  rm -f "$tmp_out" "$tmp_err" "$timeout_marker"
   return "$backend_status"
 }
 
@@ -831,6 +837,21 @@ collect_email_messages_jsonl() {
 }
 
 collect_email_lists_json() {
+  if [ -z "${STELLAR_DESKTOP_BACKEND-}" ]; then
+    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/stellar-email-lists.XXXXXX")
+    for list in accepted quarantine spam banned archive sent outbox trash; do
+      local_mail_sidecar_records "$list" "$tmp_dir/$list.index"
+    done
+    cat "$tmp_dir/spam.index" "$tmp_dir/banned.index" 2>/dev/null >"$tmp_dir/spam-review.index" || true
+    : >"$tmp_dir/lists.jsonl"
+    for list in accepted quarantine spam banned archive sent outbox trash spam-review; do
+      messages=$(json_array_from_record_index "$tmp_dir/$list.index")
+      jq -cn --arg id "$list" --argjson messages "$messages" '{id:$id,messages:$messages}' >>"$tmp_dir/lists.jsonl"
+    done
+    jq -s '.' "$tmp_dir/lists.jsonl"
+    rm -rf "$tmp_dir"
+    return 0
+  fi
   tmp=$(mktemp "${TMPDIR:-/tmp}/stellar-email-lists.XXXXXX")
   for list in accepted quarantine spam banned archive sent outbox trash spam-review; do
     stellar_messages_for_list "$list" | jq -c --arg id "$list" '{id:$id,messages:(.messages // [])}' >>"$tmp"
@@ -1212,6 +1233,160 @@ yaml_scalar_light() {
       exit
     }
   ' "$file"
+}
+
+yaml_section_scalar_light() {
+  file=$1
+  section_name=$2
+  key=$3
+  awk -v wanted_section="$section_name" -v wanted_key="$key" '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    function unquote(value) {
+      if (value ~ /^".*"$/ || value ~ /^'\''.*'\''$/) {
+        return substr(value, 2, length(value) - 2)
+      }
+      return value
+    }
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      if (line ~ /^[[:space:]]*#/ || line ~ /^[[:space:]]*$/) {
+        next
+      }
+      if (line !~ /^[ \t]/) {
+        in_section = 0
+        split(line, parts, ":")
+        heading = trim(parts[1])
+        if (heading == wanted_section) {
+          in_section = 1
+        }
+        next
+      }
+      if (!in_section) {
+        next
+      }
+      stripped = line
+      sub(/^[ \t]+/, "", stripped)
+      split(stripped, parts, ":")
+      nested_key = trim(parts[1])
+      if (nested_key != wanted_key) {
+        next
+      }
+      value = substr(stripped, index(stripped, ":") + 1)
+      value = trim(value)
+      print unquote(value)
+      exit
+    }
+  ' "$file"
+}
+
+yaml_bool_light() {
+  value=$(yaml_scalar_light "$1" "$2")
+  case $(printf '%s' "$value" | tr '[:upper:]' '[:lower:]') in
+    true|yes|1|on) printf 'true\n' ;;
+    *) printf 'false\n' ;;
+  esac
+}
+
+yaml_attachment_count_light() {
+  raw=$(yaml_scalar_light "$1" "$2")
+  raw=$(printf '%s' "$raw" | tr -d '\r')
+  case "$raw" in
+    ''|'[]') printf '0\n' ;;
+    \[*\]) printf '1\n' ;;
+    *) printf '1\n' ;;
+  esac
+}
+
+local_mail_sidecar_records() {
+  list=$1
+  index_file=$2
+  list_dir="$ROOT/$list"
+  [ -d "$list_dir" ] || return 0
+  records_dir=$(dirname "$index_file")
+  record_count=0
+  for sidecar in "$list_dir"/.*.yml "$list_dir"/*.yml "$list_dir"/*/.*.yml "$list_dir"/*/*.yml; do
+    [ -f "$sidecar" ] || continue
+    parent_dir=$(dirname "$sidecar")
+    sender_slug=
+    if [ "$parent_dir" != "$list_dir" ]; then
+      sender_slug=$(basename "$parent_dir")
+      [ "$sender_slug" != attachments ] || continue
+    fi
+    from_value=$(yaml_section_scalar_light "$sidecar" headers_cache from)
+    sender_value=${sender_slug:-$from_value}
+    subject_value=$(yaml_section_scalar_light "$sidecar" headers_cache subject)
+    [ -n "$subject_value" ] || subject_value=$(yaml_scalar_light "$sidecar" subject)
+    received_at=$(yaml_scalar_light "$sidecar" received_at)
+    [ -n "$received_at" ] || received_at=$(yaml_section_scalar_light "$sidecar" headers_cache date)
+    record_count=$((record_count + 1))
+    record_file="$records_dir/${list}-$(printf '%04d' "$record_count").json"
+    jq -cn \
+      --arg list "$list" \
+      --arg sender "$sender_value" \
+      --arg ulid "$(yaml_scalar_light "$sidecar" ulid)" \
+      --arg subject "$subject_value" \
+      --arg from "$from_value" \
+      --arg to "$(yaml_section_scalar_light "$sidecar" headers_cache to)" \
+      --arg received_at "$received_at" \
+      --arg status "$(yaml_scalar_light "$sidecar" status_shadow)" \
+      --arg read "$(yaml_bool_light "$sidecar" read)" \
+      --arg starred "$(yaml_bool_light "$sidecar" starred)" \
+      --arg pinned "$(yaml_bool_light "$sidecar" pinned)" \
+      --arg attachments "$(yaml_attachment_count_light "$sidecar" attachments)" \
+      --arg rspamd_score "$(yaml_scalar_light "$sidecar" rspamd_score)" \
+      --arg llm_spam_probability "$(yaml_scalar_light "$sidecar" llm_spam_probability)" \
+      --arg llm_spam_category "$(yaml_scalar_light "$sidecar" llm_spam_category)" \
+      --arg llm_spam_reason "$(yaml_scalar_light "$sidecar" llm_spam_reason)" \
+      --arg llm_spam_source "$(yaml_scalar_light "$sidecar" llm_spam_source)" \
+      --arg llm_spam_model "$(yaml_scalar_light "$sidecar" llm_spam_model)" \
+      --arg html_path "$(yaml_section_scalar_light "$sidecar" render html)" \
+      --arg plain_path "$(yaml_section_scalar_light "$sidecar" render plain)" \
+      '{
+        list:$list,
+        sender:$sender,
+        ulid:$ulid,
+        subject:$subject,
+        from:$from,
+        to:$to,
+        received_at:$received_at,
+        status:($status | if . == "" then $list else . end),
+        read:($read == "true"),
+        starred:($starred == "true"),
+        pinned:($pinned == "true"),
+        attachments:($attachments | tonumber),
+        rspamd_score:$rspamd_score,
+        llm_spam_probability:($llm_spam_probability | if test("^[0-9]+$") then tonumber else null end),
+        llm_spam_category:$llm_spam_category,
+        llm_spam_reason:$llm_spam_reason,
+        llm_spam_source:$llm_spam_source,
+        llm_spam_model:$llm_spam_model,
+        preview:"",
+        eml_path:"",
+        html_path:$html_path,
+        plain_path:$plain_path
+      }' >"$record_file"
+    printf '%s\t%s\n' "$received_at" "$record_file" >>"$index_file"
+  done
+}
+
+json_array_from_record_index() {
+  index_file=$1
+  [ -s "$index_file" ] || {
+    printf '[]\n'
+    return 0
+  }
+  sorted_index=$(mktemp "${TMPDIR:-/tmp}/stellar-index.XXXXXX")
+  sort -r "$index_file" >"$sorted_index"
+  while IFS="$(printf '\t')" read -r _ record_file; do
+    cat "$record_file"
+    printf '\n'
+  done <"$sorted_index" | jq -s '.'
+  rm -f "$sorted_index"
 }
 
 email_sidecar_path() {
