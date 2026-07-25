@@ -26,6 +26,12 @@ Actions:
   settings-set-daemon-running ROOT on|off
   settings-set-daemon-startup ROOT on|off
   settings-setup-folders ROOT
+  address-list ROOT
+  address-save ROOT ADDRESS_OR_LOCAL_PART LABEL FORWARDS_CSV on|off
+  address-delete ROOT ADDRESS_OR_LOCAL_PART
+  address-set-catch-all ROOT on|off
+  address-routing-plan ROOT
+  address-publish ROOT [HOST] [SSH_KEY_PATH] [SSH_KEY_PASSWORD] [SSH_PORT]
   settings-remote-set-target ROOT HOST SSH_KEY_PATH [SSH_PORT]
   settings-remote-set-auth ROOT SSH_KEY_HAS_PASSWORD SSH_KEY_SAVE_CHOICE SSH_KEY_PASSWORD [HOST] [SSH_KEY_PATH] [SSH_PORT]
   settings-remote-deploy ROOT [HOST] [SSH_KEY_PATH] [SSH_KEY_PASSWORD] [SSH_PORT]
@@ -470,9 +476,15 @@ decode_b64_to_file() {
 }
 
 resolve_mail_backend_script() {
-  if [ -n "${STELLAR_MAIL_BACKEND-}" ] && [ -f "$STELLAR_MAIL_BACKEND" ]; then
-    printf '%s\n' "$STELLAR_MAIL_BACKEND"
-    return 0
+  if [ -n "${STELLAR_MAIL_BACKEND-}" ]; then
+    if [ -f "$STELLAR_MAIL_BACKEND" ]; then
+      printf '%s\n' "$STELLAR_MAIL_BACKEND"
+      return 0
+    fi
+    return 1
+  fi
+  if [ "${STELLAR_DISABLE_BUNDLED_MAIL_ENGINE:-0}" = "1" ]; then
+    return 1
   fi
   for candidate in \
     "$repo_dir/scripts/stellar-mail-backend.sh" \
@@ -1318,6 +1330,13 @@ yaml_section_scalar_light() {
       }
       stripped = line
       sub(/^[ \t]+/, "", stripped)
+      if (awaiting_list) {
+        if (stripped ~ /^-[ \t]+/) {
+          sub(/^-[ \t]+/, "", stripped)
+          print unquote(trim(stripped))
+        }
+        exit
+      }
       split(stripped, parts, ":")
       nested_key = trim(parts[1])
       if (nested_key != wanted_key) {
@@ -1325,6 +1344,10 @@ yaml_section_scalar_light() {
       }
       value = substr(stripped, index(stripped, ":") + 1)
       value = trim(value)
+      if (value == "" || value == "[]") {
+        awaiting_list = 1
+        next
+      }
       print unquote(value)
       exit
     }
@@ -2358,7 +2381,7 @@ case "$action" in
     ensure_roots
     jq -n --arg root "$ROOT" '{ok:true,root:$root,folders_ready:true}'
     ;;
-  health|overview|settings-controls|settings-browse-root|settings-set-test-recipient|settings-verify-domain|settings-set-domain|settings-ssl-prereq-status|settings-ssl-wizard-status|settings-setup-ssl|settings-set-daemon-installed|settings-set-daemon-running|settings-set-daemon-startup|settings-remote-set-target|settings-remote-set-auth|settings-remote-deploy|settings-remote-verify|settings-remote-send-test|settings-remote-sync|settings-llm-controls|settings-llm-set|settings-llm-install-ollama|settings-llm-set-daemon|settings-llm-install-model|settings-llm-uninstall-model|spam-classify|event-feed|contact-get|contact-save|list-senders|list-archive-bundle|list-inbox-bundle-fast|list-messages-fast|list-messages|set-flag|move-message|move-sender|draft-list|draft-get|draft-save|draft-delete|draft-send)
+  health|overview|settings-controls|settings-browse-root|settings-set-test-recipient|settings-verify-domain|settings-set-domain|settings-ssl-prereq-status|settings-ssl-wizard-status|settings-setup-ssl|settings-set-daemon-installed|settings-set-daemon-running|settings-set-daemon-startup|settings-remote-set-target|settings-remote-set-auth|settings-remote-deploy|settings-remote-verify|settings-remote-send-test|settings-remote-sync|settings-llm-controls|settings-llm-set|settings-llm-install-ollama|settings-llm-set-daemon|settings-llm-install-model|settings-llm-uninstall-model|address-list|address-save|address-delete|address-set-catch-all|address-routing-plan|address-publish|spam-classify|event-feed|contact-get|contact-save|list-senders|list-archive-bundle|list-inbox-bundle-fast|list-messages-fast|list-messages|set-flag|move-message|move-sender|draft-list|draft-get|draft-save|draft-delete|draft-send)
     mail_backend_json "$action" "$@"
     ;;
   bind-contact)

@@ -30,8 +30,6 @@ trap 'rm -f "$tmp" "$tmp_op"' EXIT HUP INT TERM
 
 operations_dir=$(stellar_runtime_operations_dir)
 history_file=$(stellar_runtime_history_file)
-mkdir -p "$operations_dir"
-mkdir -p "$(dirname "$history_file")"
 
 payload_value() {
   jq -r "$1 // \"\"" "$payload_path" 2>/dev/null || printf ''
@@ -41,6 +39,8 @@ record_operation() {
   op_id=$1
   op_action=$2
   op_status=$3
+  mkdir -p "$operations_dir"
+  mkdir -p "$(dirname "$history_file")"
   jq -cn \
     --arg schema "theurgy-operation-status/v1" \
     --arg id "$op_id" \
@@ -122,6 +122,29 @@ case "$action" in
     ;;
   settings_remote_sync)
     run_backend_operation settings-remote-sync "$root" "$(payload_value '.host')" "$(payload_value '.ssh_key_path')" "$(payload_value '.ssh_key_password')" "$(payload_value '.ssh_port')"
+    ;;
+  address_list)
+    run_backend_json address-list "$root"
+    jq -cn --slurpfile result "$tmp" '{success:true,data:$result[0]}'
+    ;;
+  address_save)
+    enabled=$(payload_value '.enabled // true')
+    case "$enabled" in true|1|yes|on) enabled=on ;; *) enabled=off ;; esac
+    run_backend_json address-save "$root" "$(payload_value '.local_part')" "$(payload_value '.label')" "$(payload_value '.forwards')" "$enabled"
+    jq -cn --slurpfile result "$tmp" '{success:true,data:$result[0]}'
+    ;;
+  address_delete)
+    run_backend_json address-delete "$root" "$(payload_value '.local_part')"
+    jq -cn --slurpfile result "$tmp" '{success:true,data:$result[0]}'
+    ;;
+  address_set_catch_all)
+    enabled=$(payload_value '.enabled')
+    case "$enabled" in true|1|yes|on) enabled=on ;; *) enabled=off ;; esac
+    run_backend_json address-set-catch-all "$root" "$enabled"
+    jq -cn --slurpfile result "$tmp" '{success:true,data:$result[0]}'
+    ;;
+  address_publish)
+    run_backend_operation address-publish "$root" "$(payload_value '.host')" "$(payload_value '.ssh_key_path')" "$(payload_value '.ssh_key_password')" "$(payload_value '.ssh_port')"
     ;;
   install_simplex_cli)
     run_backend_operation install-simplex-cli "$root"

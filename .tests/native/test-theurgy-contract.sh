@@ -34,7 +34,7 @@ case "$action" in
     jq -n --arg host "${1-}" '{ok:true,action:"remote-sync",host:$host}'
     ;;
   *)
-    jq -n --arg action "$action" --arg a1 "${1-}" --arg a2 "${2-}" --arg a3 "${3-}" '{ok:true,action:$action,args:[$a1,$a2,$a3]}'
+    jq -n --arg action "$action" --arg a1 "${1-}" --arg a2 "${2-}" --arg a3 "${3-}" --arg a4 "${4-}" '{ok:true,action:$action,args:[$a1,$a2,$a3,$a4]}'
     ;;
 esac
 SH
@@ -51,6 +51,7 @@ jq -e '
   (.state.command == ["scripts/stellar-runtime-state.sh"]) and
   (.state.statusCommand == ["scripts/stellar-runtime-status.sh"]) and
   (.actions | map(.id) | index("settings_remote_sync")) and
+  (.actions | map(.id) | index("address_publish")) and
   ([.actions[] | select(.longRunning == true)] | length) > 0 and
   (.persistence.history == "append-only-operation-logs")
 ' "$product_ir" >/dev/null
@@ -58,6 +59,8 @@ jq -e '
 jq -e '
   .version == "theurgy-desktop-surface-ir/v1" and
   (.actions | index("settings_remote_sync")) and
+  (.actions | index("address_save")) and
+  (.capabilities | index("single-user-address-routing")) and
   (.capabilities | index("transport-operation-history"))
 ' "$desktop_surface_ir" >/dev/null
 
@@ -93,6 +96,14 @@ printf '%s\n' "$action_json" | jq -e '
   .operation.status == "completed" and
   .data.action == "remote-sync" and
   .data.host == "mail.example.org"
+' >/dev/null
+
+printf '%s\n' '{"mail_root":"/tmp/stellar mail","local_part":"receipts","label":"Receipts","forwards":"archive@example.net","enabled":true}' >"$payload"
+address_json=$(HOME="$tmpdir/home" XDG_STATE_HOME="$tmpdir/state" STELLAR_RUNTIME_BACKEND="$fake_backend" sh "$repo_dir/scripts/stellar-runtime-action.sh" address_save "$payload")
+printf '%s\n' "$address_json" | jq -e '
+  .success == true and
+  .data.action == "address-save" and
+  .data.args == ["receipts","Receipts","archive@example.net","on"]
 ' >/dev/null
 
 op_id=$(printf '%s\n' "$action_json" | jq -r '.operation.id')

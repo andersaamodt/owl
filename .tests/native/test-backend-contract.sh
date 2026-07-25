@@ -30,6 +30,7 @@ backend() {
   HOME="$tmpdir/home" \
   XDG_STATE_HOME="$tmpdir/state" \
   XDG_CONFIG_HOME="$tmpdir/config" \
+  STELLAR_DISABLE_BUNDLED_MAIL_ENGINE=1 \
   sh "$repo_dir/scripts/stellar-backend.sh" "$@"
 }
 
@@ -40,6 +41,13 @@ backend_with_mail() {
   XDG_STATE_HOME="$tmpdir/state" \
   XDG_CONFIG_HOME="$tmpdir/config" \
   STELLAR_MAIL_BACKEND="$mail_backend" \
+  sh "$repo_dir/scripts/stellar-backend.sh" "$@"
+}
+
+backend_with_bundled_mail() {
+  HOME="$tmpdir/home" \
+  XDG_STATE_HOME="$tmpdir/state" \
+  XDG_CONFIG_HOME="$tmpdir/config" \
   sh "$repo_dir/scripts/stellar-backend.sh" "$@"
 }
 
@@ -134,6 +142,8 @@ starred: false
 received_at: $received_at
 headers_cache:
   from: $from
+  to:
+  - owner@example.org
   subject: $subject
 render:
   plain: $ulid.txt
@@ -196,6 +206,108 @@ SH
       (.mail_backend.message | contains("health check"))
     ' >/dev/null
   [ ! -e "$root" ]
+}
+
+bundled_mail_backend_is_discovered_and_healthy() {
+  root="$tmpdir/bundled-mail-engine/mail"
+  mkdir -p "$tmpdir/home"
+  output=$(backend_with_bundled_mail doctor "$root")
+  printf '%s\n' "$output" | jq -e '
+    .ok == true and
+    .mail_backend.available == true and
+    .mail_backend.configured == true and
+    .mail_backend.source == "bundled" and
+    (.mail_backend.path | endswith("/scripts/stellar-mail-backend.sh"))
+  ' >/dev/null
+  [ ! -e "$root" ]
+}
+
+bundled_mail_snapshot_is_read_only() {
+  root="$tmpdir/bundled-read-only/mail"
+  state="$tmpdir/bundled-read-only/state"
+  home="$tmpdir/bundled-read-only/home"
+  mkdir -p "$home"
+  output=$(
+    HOME="$home" \
+    XDG_STATE_HOME="$state" \
+    XDG_CONFIG_HOME="$tmpdir/bundled-read-only/config" \
+    sh "$repo_dir/scripts/stellar-backend.sh" snapshot "$root"
+  )
+  printf '%s\n' "$output" | jq -e '
+    .ok == true and
+    .settings.mail_backend.available == true and
+    .settings.addresses.catch_all == false
+  ' >/dev/null
+  [ ! -e "$root" ] && [ ! -e "$state" ]
+}
+
+bundled_mail_backend_manages_single_user_addresses() {
+  root="$tmpdir/bundled-addresses/mail"
+  mkdir -p "$tmpdir/home"
+  backend_with_bundled_mail settings-set-domain "$root" example.org >/dev/null
+
+  initial=$(backend_with_bundled_mail address-list "$root")
+  printf '%s\n' "$initial" | jq -e '
+    .ok == true and
+    .domain == "example.org" and
+    .catch_all == false and
+    .addresses == [{
+      local_part:"postmaster",
+      address:"postmaster@example.org",
+      label:"Postmaster",
+      forwards:[],
+      enabled:true,
+      destination:"Stellar Inbox",
+      system:true
+    }]
+  ' >/dev/null
+
+  addresses=$(backend_with_bundled_mail address-save "$root" me Personal "backup@example.net" on)
+  addresses=$(backend_with_bundled_mail address-save "$root" receipts Receipts "" on)
+  backend_with_bundled_mail address-save "$root" old Disabled "" off >/dev/null
+  printf '%s\n' "$addresses" | jq -e '
+    .catch_all == false and
+    ([.addresses[] | select(.address == "me@example.org")][0].forwards == ["backup@example.net"]) and
+    ([.addresses[] | select(.address == "receipts@example.org")][0].destination == "Stellar Inbox") and
+    ([.addresses[] | select(.system == false)] | length) == 2
+  ' >/dev/null
+
+  if backend_with_bundled_mail address-save "$root" me Loop "me@example.org" on >"$tmpdir/address-loop.out" 2>"$tmpdir/address-loop.err"; then
+    return 1
+  fi
+  grep -q "cannot forward to itself" "$tmpdir/address-loop.err"
+  if backend_with_bundled_mail address-save "$root" 'bad..name' Invalid "" on >"$tmpdir/address-invalid.out" 2>"$tmpdir/address-invalid.err"; then
+    return 1
+  fi
+  grep -q "valid email name" "$tmpdir/address-invalid.err"
+  if backend_with_bundled_mail address-save "$root" 'me@other.example' Invalid "" on >"$tmpdir/address-domain.out" 2>"$tmpdir/address-domain.err"; then
+    return 1
+  fi
+  grep -q "must use @example.org" "$tmpdir/address-domain.err"
+
+  snapshot=$(backend_with_bundled_mail snapshot "$root")
+  printf '%s\n' "$snapshot" | jq -e '
+    .settings.addresses.domain == "example.org" and
+    ([.settings.addresses.addresses[] | select(.address == "receipts@example.org")] | length) == 1
+  ' >/dev/null
+
+  routing=$(backend_with_bundled_mail address-routing-plan "$root")
+  printf '%s\n' "$routing" | jq -e '
+    .postfix_map == [
+      "postmaster@example.org stellar-inbox@localhost",
+      "me@example.org stellar-inbox@localhost,backup@example.net",
+      "receipts@example.org stellar-inbox@localhost"
+    ] and
+    (all(.postfix_map[]; startswith("@example.org ") | not))
+  ' >/dev/null
+
+  backend_with_bundled_mail address-delete "$root" receipts >/dev/null
+  final=$(backend_with_bundled_mail address-set-catch-all "$root" off)
+  printf '%s\n' "$final" | jq -e '
+    .catch_all == false and
+    ([.addresses[] | select(.address == "receipts@example.org")] | length) == 0
+  ' >/dev/null
+  [ -f "$root/.stellar/mail-addresses.json" ]
 }
 
 prepare_creates_shared_roots() {
@@ -438,7 +550,7 @@ message_detail_returns_simplex_and_email_messages() {
   simplex_id=$(backend_with_mail "$fake" snapshot "$root" | jq -r '.inbox[] | select(.transport == "simplex") | .id' | head -n 1)
   email_id=$(backend_with_mail "$fake" snapshot "$root" | jq -r '.inbox[] | select(.transport == "email") | .id' | head -n 1)
   backend_with_mail "$fake" message-detail "$root" "$simplex_id" | jq -e '.ok == true and .transport == "simplex" and .body == "Encrypted detail"' >/dev/null
-  backend_with_mail "$fake" get-message "$root" "$email_id" | jq -e '.ok == true and .transport == "email" and .body == "Full local body"' >/dev/null
+  backend_with_mail "$fake" get-message "$root" "$email_id" | jq -e '.ok == true and .transport == "email" and .to == "owner@example.org" and .body == "Full local body"' >/dev/null
 }
 
 simplex_tick_uses_transport_hook_for_poll_and_send() {
@@ -791,6 +903,9 @@ run_case "doctor is read-only" doctor_is_read_only
 run_case "snapshot is read-only when root is missing" snapshot_is_read_only_when_root_is_missing
 run_case "missing mail backend fails email actions clearly" missing_mail_backend_fails_email_actions_clearly
 run_case "configured mail backend must pass health check" configured_mail_backend_must_pass_health_check
+run_case "bundled mail backend is discovered and healthy" bundled_mail_backend_is_discovered_and_healthy
+run_case "bundled mail snapshot is read-only" bundled_mail_snapshot_is_read_only
+run_case "bundled mail backend manages single-user addresses" bundled_mail_backend_manages_single_user_addresses
 run_case "prepare creates shared roots" prepare_creates_shared_roots
 run_case "SimpleX messages share one timeline and inbox" simplex_messages_share_one_timeline_and_inbox
 run_case "SimpleX send queues without email fallback" simplex_send_queues_without_email_fallback

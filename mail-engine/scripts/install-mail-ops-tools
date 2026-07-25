@@ -1,0 +1,78 @@
+#!/bin/sh
+set -eu
+
+is_installed() {
+  os_name=$(uname -s)
+  if [ "$os_name" = "Darwin" ]; then
+    command -v certbot >/dev/null 2>&1
+    return
+  fi
+
+  for cmd in certbot rspamadm chronyc; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      return 1
+    fi
+  done
+  if [ "$os_name" = "Linux" ] && ! command -v systemctl >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
+}
+
+as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+    return
+  fi
+  if command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+    return
+  fi
+  printf '%s\n' "root privileges required; install sudo or run as root" >&2
+  return 1
+}
+
+if [ "${1-}" = "--status" ]; then
+  if is_installed; then
+    exit 0
+  fi
+  exit 1
+fi
+
+if is_installed; then
+  printf '%s\n' "mail ops tools already installed"
+  exit 0
+fi
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  if ! command -v brew >/dev/null 2>&1; then
+    printf '%s\n' "Homebrew is required on macOS to install mail ops tools" >&2
+    exit 1
+  fi
+  brew install certbot
+  printf '%s\n' "installed certbot on macOS"
+  printf '%s\n' "note: rspamadm/chronyc are Linux-oriented and not installed via Homebrew here"
+  exit 0
+fi
+
+if command -v apt-get >/dev/null 2>&1; then
+  as_root apt-get update
+  as_root apt-get install -y certbot rspamd chrony
+  printf '%s\n' "installed certbot, rspamd, and chrony"
+  exit 0
+fi
+
+if command -v dnf >/dev/null 2>&1; then
+  as_root dnf install -y certbot rspamd chrony
+  printf '%s\n' "installed certbot, rspamd, and chrony"
+  exit 0
+fi
+
+if command -v pacman >/dev/null 2>&1; then
+  as_root pacman -Sy --noconfirm certbot rspamd chrony
+  printf '%s\n' "installed certbot, rspamd, and chrony"
+  exit 0
+fi
+
+printf '%s\n' "unsupported package manager for mail ops tool install" >&2
+exit 1

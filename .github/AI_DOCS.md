@@ -40,7 +40,7 @@
 ### Runtime And Bridge Ownership
 - Backend action surface: `scripts/stellar-backend.sh` plus typed runtime contract scripts
 - Mail corpus reads: `scripts/stellar-backend.sh` is the arche and reads the file-first corpus directly.
-- Mail mutations, transport, and server administration: an explicit mail-engine adapter selected by `STELLAR_MAIL_BACKEND`; no compatible engine is bundled yet.
+- Mail mutations, transport, and server administration: the bundled Rust mail engine behind `scripts/stellar-mail-backend.sh`; `STELLAR_MAIL_BACKEND` is an explicit development override.
 - Backend path resolution owner: theurgy or native-host and backend contracts
 - Shell-fragment policy: explicit backend actions only
 - Native/generated boundary: generated native desktop and mobile shells around a shell backend and typed runtime contracts
@@ -50,7 +50,7 @@
 - Test entrypoints under `.tests/`: yes
 - Backend contract coverage: yes
 - UI/static/native-shell coverage: yes
-- Known gaps: the desktop UI prefs path remains a documented storage exception; a production mail engine is not bundled.
+- Known gaps: the desktop UI prefs path remains a documented storage exception.
 
 ### Release, Build, Generated Output, And Cruft
 - Release artifact root: operator-local release outputs only
@@ -65,5 +65,9 @@
 
 ### Pending Decisions
 - Decide whether desktop UI prefs stay in the XDG config root or migrate fully into the `~/mail`-owned Stellar contract.
-- Decide whether the production mail engine becomes a component of this repository or a separately versioned dependency.
-- Decide whether managed receiving addresses are aliases into one Stellar inbox, isolated local mailboxes, forwarding routes, or a supported combination.
+
+### Settled Mail Architecture
+- Stellar ships its own installable mail server.
+- Stellar is single-user: enabled addresses and aliases route into one unified inbox.
+- Each address may forward a copy to zero or more external destinations.
+- `postmaster` is always accepted; catch-all is disabled by default.

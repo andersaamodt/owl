@@ -7,6 +7,11 @@ Stellar builds desktop and mobile native targets from repository-owned IR:
 
 GitHub Actions builds all release targets in `.github/workflows/native-release.yml`.
 
+Desktop artifacts include the compiled Rust mail engine, its daemon, the
+Stellar adapter, and engine source for remote builds. Generated output and
+Cargo targets remain outside the repository under the operator's XDG state
+directory.
+
 ## Android
 
 The Android app is direct-distribution first. The workflow always uploads

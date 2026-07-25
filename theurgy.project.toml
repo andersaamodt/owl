@@ -14,7 +14,7 @@ license = "LicenseRef-OWL-3.1 OR AGPL-3.0-or-later"
 
 [core]
 binary = "scripts/stellar-backend.sh"
-role = "unified-timeline-and-secure-chat-control-plane"
+role = "single-user-mail-and-messaging-control-plane"
 state = "mail-root-file-first"
 
 [wizardry]

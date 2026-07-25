@@ -22,4 +22,8 @@ if [ -f "$test_dir/test-theurgy-contract.sh" ]; then
   sh "$test_dir/test-theurgy-contract.sh"
 fi
 
+if [ -f "$test_dir/test-mail-engine-bundle.sh" ]; then
+  sh "$test_dir/test-mail-engine-bundle.sh"
+fi
+
 printf '%s\n' "native test suite passed"

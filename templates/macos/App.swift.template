@@ -374,6 +374,7 @@ private struct SettingsSnapshot: Decodable, Sendable {
   var ssl_ready: Bool
   var folders_ready: Bool
   var mail_backend: MailBackendSettings
+  var addresses: ReceivingAddressSettings
   var daemon: DaemonSettings
   var remote: RemoteSettings
   var remote_auth: RemoteAuthSettings
@@ -388,6 +389,7 @@ private struct SettingsSnapshot: Decodable, Sendable {
     ssl_ready: Bool = false,
     folders_ready: Bool = false,
     mail_backend: MailBackendSettings = MailBackendSettings(),
+    addresses: ReceivingAddressSettings = ReceivingAddressSettings(),
     daemon: DaemonSettings = DaemonSettings(),
     remote: RemoteSettings = RemoteSettings(),
     remote_auth: RemoteAuthSettings = RemoteAuthSettings()
@@ -401,13 +403,14 @@ private struct SettingsSnapshot: Decodable, Sendable {
     self.ssl_ready = ssl_ready
     self.folders_ready = folders_ready
     self.mail_backend = mail_backend
+    self.addresses = addresses
     self.daemon = daemon
     self.remote = remote
     self.remote_auth = remote_auth
   }
 
   private enum CodingKeys: String, CodingKey {
-    case ok, unavailable, message, test_recipient, email_domain, domain, domain_configured, ssl_ready, folders_ready, mail_backend, daemon, remote, remote_auth
+    case ok, unavailable, message, test_recipient, email_domain, domain, domain_configured, ssl_ready, folders_ready, mail_backend, addresses, daemon, remote, remote_auth
   }
 
   init(from decoder: Decoder) throws {
@@ -423,10 +426,29 @@ private struct SettingsSnapshot: Decodable, Sendable {
     ssl_ready = try values.decodeIfPresent(Bool.self, forKey: .ssl_ready) ?? false
     folders_ready = try values.decodeIfPresent(Bool.self, forKey: .folders_ready) ?? false
     mail_backend = try values.decodeIfPresent(MailBackendSettings.self, forKey: .mail_backend) ?? MailBackendSettings()
+    addresses = try values.decodeIfPresent(ReceivingAddressSettings.self, forKey: .addresses) ?? ReceivingAddressSettings()
     daemon = try values.decodeIfPresent(DaemonSettings.self, forKey: .daemon) ?? DaemonSettings()
     remote = try values.decodeIfPresent(RemoteSettings.self, forKey: .remote) ?? RemoteSettings()
     remote_auth = try values.decodeIfPresent(RemoteAuthSettings.self, forKey: .remote_auth) ?? RemoteAuthSettings()
   }
+}
+
+private struct ReceivingAddressSettings: Decodable, Sendable {
+  var domain: String = ""
+  var catch_all: Bool = false
+  var addresses: [ReceivingAddress] = []
+}
+
+private struct ReceivingAddress: Decodable, Identifiable, Sendable {
+  var local_part: String
+  var address: String
+  var label: String
+  var forwards: [String]
+  var enabled: Bool
+  var destination: String
+  var system: Bool
+
+  var id: String { address }
 }
 
 private struct MailBackendSettings: Decodable, Sendable {
@@ -1329,6 +1351,10 @@ private final class StellarSession: ObservableObject {
   @Published var contactDraftFavorite: Bool = false
   @Published var settingsDomainDraft: String = ""
   @Published var settingsTestRecipientDraft: String = ""
+  @Published var addressLocalPartDraft: String = ""
+  @Published var addressLabelDraft: String = ""
+  @Published var addressForwardsDraft: String = ""
+  @Published var addressEnabledDraft: Bool = true
   @Published var remoteHostDraft: String = ""
   @Published var remoteKeyPathDraft: String = ""
   @Published var remotePortDraft: String = ""
@@ -2778,6 +2804,60 @@ private final class StellarSession: ObservableObject {
 
   func saveTestRecipient() {
     runBackendAction("settings-set-test-recipient", args: [settingsTestRecipientDraft], status: "Test recipient saved")
+  }
+
+  func editReceivingAddress(_ address: ReceivingAddress) {
+    addressLocalPartDraft = address.local_part
+    addressLabelDraft = address.label
+    addressForwardsDraft = address.forwards.joined(separator: ", ")
+    addressEnabledDraft = address.enabled
+  }
+
+  func saveReceivingAddress() {
+    let localPart = addressLocalPartDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !localPart.isEmpty else {
+      showToast("Enter an address name")
+      return
+    }
+    runBackendAction(
+      "address-save",
+      args: [
+        localPart,
+        addressLabelDraft,
+        addressForwardsDraft,
+        addressEnabledDraft ? "on" : "off"
+      ],
+      status: "Receiving address saved"
+    )
+  }
+
+  func setReceivingAddress(_ address: ReceivingAddress, enabled: Bool) {
+    runBackendAction(
+      "address-save",
+      args: [
+        address.local_part,
+        address.label,
+        address.forwards.joined(separator: ","),
+        enabled ? "on" : "off"
+      ],
+      status: enabled ? "Receiving address enabled" : "Receiving address disabled"
+    )
+  }
+
+  func deleteReceivingAddress(_ address: ReceivingAddress) {
+    runBackendAction("address-delete", args: [address.local_part], status: "Receiving address deleted")
+  }
+
+  func setCatchAll(_ enabled: Bool) {
+    runBackendAction(
+      "address-set-catch-all",
+      args: [enabled ? "on" : "off"],
+      status: enabled ? "Catch-all enabled" : "Catch-all disabled"
+    )
+  }
+
+  func publishReceivingAddresses() {
+    runBackendAction("address-publish", status: "Receiving addresses applied to server")
   }
 
   func setDaemonRunning(_ running: Bool) {
@@ -6448,6 +6528,69 @@ private struct SettingsView: View {
         }
         Button { session.setupTLSForCurrentServer() } label: {
           Label("Setup TLS", systemImage: "lock.shield")
+        }
+      }
+      .disabled(!session.snapshot.settings.mail_backend.available)
+      Section("Receiving Addresses") {
+        if session.snapshot.settings.addresses.domain.isEmpty {
+          Text("Save your email domain before creating receiving addresses.")
+            .foregroundStyle(.secondary)
+        } else {
+          ForEach(session.snapshot.settings.addresses.addresses) { address in
+            HStack(alignment: .center, spacing: 10) {
+              Button { session.editReceivingAddress(address) } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(address.address)
+                  Text(address.forwards.isEmpty ? address.destination : "\(address.destination) + \(address.forwards.joined(separator: ", "))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+              }
+              .buttonStyle(.plain)
+              Spacer()
+              if address.system {
+                Text("Required")
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              } else {
+                Toggle("Enabled", isOn: Binding(
+                  get: { address.enabled },
+                  set: { session.setReceivingAddress(address, enabled: $0) }
+                ))
+                .labelsHidden()
+                Button(role: .destructive) { session.deleteReceivingAddress(address) } label: {
+                  Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help("Delete address")
+              }
+            }
+          }
+          Divider()
+          HStack {
+            TextField("Address name", text: $session.addressLocalPartDraft)
+              .frame(width: 130)
+            Text("@\(session.snapshot.settings.addresses.domain)")
+              .foregroundStyle(.secondary)
+            TextField("Label", text: $session.addressLabelDraft)
+              .frame(width: 130)
+          }
+          TextField("Forward copies to (optional, comma-separated)", text: $session.addressForwardsDraft)
+          Toggle("Enabled", isOn: $session.addressEnabledDraft)
+          Button { session.saveReceivingAddress() } label: {
+            Label("Save Address", systemImage: "at.badge.plus")
+          }
+          Toggle("Accept mail to any unlisted address", isOn: Binding(
+            get: { session.snapshot.settings.addresses.catch_all },
+            set: { session.setCatchAll($0) }
+          ))
+          Text("Catch-all is off by default because it receives more spam.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Button { session.publishReceivingAddresses() } label: {
+            Label("Apply Addresses to Server", systemImage: "server.rack")
+          }
+          .disabled(session.snapshot.settings.remote.host.isEmpty)
         }
       }
       .disabled(!session.snapshot.settings.mail_backend.available)

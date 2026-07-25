@@ -1,0 +1,333 @@
+#!/bin/sh
+set -eu
+
+service_label="com.owl.owld"
+service_name="owld.service"
+systemd_user_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+systemd_unit_path="$systemd_user_dir/$service_name"
+launchd_dir="$HOME/Library/LaunchAgents"
+launchd_plist="$launchd_dir/$service_label.plist"
+script_path=$0
+while [ -L "$script_path" ]; do
+  link_target=$(readlink "$script_path") || break
+  case "$link_target" in
+    /*) script_path=$link_target ;;
+    *) script_path=$(dirname "$script_path")/$link_target ;;
+  esac
+done
+script_dir=$(CDPATH= cd -P -- "$(dirname "$script_path")" && pwd)
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+detect_manager() {
+  case "$(uname -s)" in
+    Darwin)
+      printf 'launchd\n'
+      ;;
+    Linux)
+      if command -v systemctl >/dev/null 2>&1; then
+        printf 'systemd\n'
+      else
+        printf 'none\n'
+      fi
+      ;;
+    *)
+      printf 'none\n'
+      ;;
+  esac
+}
+
+daemon_bin_path() {
+  if command -v owl-daemon >/dev/null 2>&1; then
+    command -v owl-daemon
+    return
+  fi
+  if command -v owld >/dev/null 2>&1; then
+    command -v owld
+    return
+  fi
+  if [ -x "$script_dir/owld" ]; then
+    printf '%s\n' "$script_dir/owld"
+    return
+  fi
+  die "owl-daemon (or owld) must be installed on PATH first"
+}
+
+launchd_domain() {
+  uid=$(id -u)
+  printf 'gui/%s\n' "$uid"
+}
+
+is_installed() {
+  manager=$(detect_manager)
+  case "$manager" in
+    systemd) [ -f "$systemd_unit_path" ] ;;
+    launchd) [ -f "$launchd_plist" ] ;;
+    *) return 1 ;;
+  esac
+}
+
+is_running() {
+  manager=$(detect_manager)
+  case "$manager" in
+    systemd)
+      systemctl --user is-active --quiet "$service_name"
+      ;;
+    launchd)
+      domain=$(launchd_domain)
+      launchctl print "${domain}/${service_label}" 2>/dev/null | grep -q "state = running"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+is_enabled() {
+  manager=$(detect_manager)
+  case "$manager" in
+    systemd)
+      systemctl --user is-enabled --quiet "$service_name"
+      ;;
+    launchd)
+      [ -f "$launchd_plist" ] || return 1
+      domain=$(launchd_domain)
+      disabled_map=$(launchctl print-disabled "$domain" 2>/dev/null || true)
+      case "$disabled_map" in
+        *"\"$service_label\" => true"*|*"$service_label => true"*)
+          return 1
+          ;;
+        *"\"$service_label\" => false"*|*"$service_label => false"*)
+          return 0
+          ;;
+        *)
+          # Missing key defaults to enabled in launchd.
+          return 0
+          ;;
+      esac
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+install_service() {
+  manager=$(detect_manager)
+  daemon_bin=$(daemon_bin_path)
+  case "$manager" in
+    systemd)
+      mkdir -p "$systemd_user_dir"
+      cat >"$systemd_unit_path" <<EOF
+[Unit]
+Description=Owl mail daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$daemon_bin
+Restart=on-failure
+RestartSec=2
+WorkingDirectory=$HOME
+
+[Install]
+WantedBy=default.target
+EOF
+      systemctl --user daemon-reload
+      ;;
+    launchd)
+      mkdir -p "$launchd_dir"
+      cat >"$launchd_plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$service_label</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$daemon_bin</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>WorkingDirectory</key>
+  <string>$HOME</string>
+  <key>StandardOutPath</key>
+  <string>$HOME/Library/Logs/owl-daemon.log</string>
+  <key>StandardErrorPath</key>
+  <string>$HOME/Library/Logs/owl-daemon.err.log</string>
+</dict>
+</plist>
+EOF
+      ;;
+    *)
+      die "unsupported platform: requires Linux systemd or macOS launchd"
+      ;;
+  esac
+}
+
+remove_service() {
+  manager=$(detect_manager)
+  case "$manager" in
+    systemd)
+      systemctl --user disable "$service_name" >/dev/null 2>&1 || :
+      systemctl --user stop "$service_name" >/dev/null 2>&1 || :
+      rm -f "$systemd_unit_path"
+      systemctl --user daemon-reload
+      ;;
+    launchd)
+      domain=$(launchd_domain)
+      launchctl bootout "$domain" "$launchd_plist" >/dev/null 2>&1 || :
+      launchctl enable "${domain}/${service_label}" >/dev/null 2>&1 || :
+      rm -f "$launchd_plist"
+      ;;
+    *)
+      die "unsupported platform: requires Linux systemd or macOS launchd"
+      ;;
+  esac
+}
+
+start_service() {
+  is_installed || die "daemon service is not installed"
+  manager=$(detect_manager)
+  case "$manager" in
+    systemd)
+      systemctl --user start "$service_name"
+      ;;
+    launchd)
+      domain=$(launchd_domain)
+      launchctl bootstrap "$domain" "$launchd_plist" >/dev/null 2>&1 || :
+      launchctl kickstart -k "${domain}/${service_label}"
+      ;;
+    *)
+      die "unsupported platform: requires Linux systemd or macOS launchd"
+      ;;
+  esac
+}
+
+stop_service() {
+  is_installed || die "daemon service is not installed"
+  manager=$(detect_manager)
+  case "$manager" in
+    systemd)
+      systemctl --user stop "$service_name"
+      ;;
+    launchd)
+      domain=$(launchd_domain)
+      launchctl kill TERM "${domain}/${service_label}" >/dev/null 2>&1 || :
+      ;;
+    *)
+      die "unsupported platform: requires Linux systemd or macOS launchd"
+      ;;
+  esac
+}
+
+enable_startup() {
+  is_installed || die "daemon service is not installed"
+  manager=$(detect_manager)
+  case "$manager" in
+    systemd)
+      systemctl --user enable "$service_name"
+      ;;
+    launchd)
+      domain=$(launchd_domain)
+      launchctl bootstrap "$domain" "$launchd_plist" >/dev/null 2>&1 || :
+      launchctl enable "${domain}/${service_label}"
+      ;;
+    *)
+      die "unsupported platform: requires Linux systemd or macOS launchd"
+      ;;
+  esac
+}
+
+disable_startup() {
+  is_installed || die "daemon service is not installed"
+  manager=$(detect_manager)
+  case "$manager" in
+    systemd)
+      systemctl --user disable "$service_name"
+      ;;
+    launchd)
+      domain=$(launchd_domain)
+      launchctl disable "${domain}/${service_label}"
+      ;;
+    *)
+      die "unsupported platform: requires Linux systemd or macOS launchd"
+      ;;
+  esac
+}
+
+status_summary() {
+  if is_installed; then
+    installed_text="installed"
+  else
+    installed_text="not-installed"
+  fi
+
+  if is_running; then
+    running_text="running"
+  else
+    running_text="stopped"
+  fi
+
+  if is_enabled; then
+    enabled_text="enabled"
+  else
+    enabled_text="disabled"
+  fi
+
+  printf 'install=%s running=%s startup=%s\n' "$installed_text" "$running_text" "$enabled_text"
+}
+
+usage() {
+  cat <<'USAGE' >&2
+usage: owl-daemon-service <command>
+
+commands:
+  install
+  remove
+  start
+  stop
+  enable-startup
+  disable-startup
+  status
+  --status-installed
+  --status-running
+  --status-enabled
+USAGE
+}
+
+cmd=${1-}
+case "$cmd" in
+  install) install_service ;;
+  remove) remove_service ;;
+  start) start_service ;;
+  stop) stop_service ;;
+  enable-startup) enable_startup ;;
+  disable-startup) disable_startup ;;
+  status) status_summary ;;
+  --status-installed)
+    if is_installed; then exit 0; fi
+    exit 1
+    ;;
+  --status-running)
+    if is_running; then exit 0; fi
+    exit 1
+    ;;
+  --status-enabled)
+    if is_enabled; then exit 0; fi
+    exit 1
+    ;;
+  --help|--usage|-h|'')
+    usage
+    ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac

@@ -66,25 +66,30 @@ with a remote Secure Chat daemon over SSH through
 `scripts/stellar-secure-chat-hook.sh`; hosts and remote commands must be configured
 explicitly and are not baked into the repository.
 
-### Email engine status
+### Built-in email server
 
 Stellar reads the file-first mail corpus directly, so an existing `~/mail`
-archive remains browsable without another project checkout. Sending email,
-receiving new mail, changing message state, and administering a local or remote
-mail server require a mail engine.
+archive remains browsable even while its server is stopped. This repository
+includes the Rust mail engine, its daemon, its Postfix adapter, and remote
+installer under `mail-engine/`. Desktop releases bundle the compiled engine and
+the source needed to build it for a different server architecture.
 
-This repository does not currently ship that engine. Development builds may
-select one explicitly:
+For a single-user server:
 
-```sh
-STELLAR_MAIL_BACKEND=/absolute/path/to/compatible-mail-backend.sh \
-  sh scripts/stellar-backend.sh doctor ~/mail
-```
+1. Save the email domain.
+2. Create receiving addresses such as `me`, `work`, or `receipts`.
+3. Optionally add forwarding destinations.
+4. Configure the SSH server and deploy it.
+5. Complete the displayed DNS and TLS checks.
 
-`doctor` runs the engine's read-only `health` action. It and the native Email
-settings report the engine as unavailable when it is absent or unhealthy.
-Stellar no longer searches sibling repositories or silently presents server
-controls as operational.
+Every enabled address delivers to the same Stellar inbox. `postmaster` is
+always present, catch-all receiving is off by default, and unknown addresses
+are rejected. Address changes can be applied to an already-deployed server
+without rebuilding it.
+
+`doctor` runs the bundled engine's read-only `health` action. An explicit
+`STELLAR_MAIL_BACKEND` remains available for development overrides, but Stellar
+does not search sibling repositories.
 
 ## For Developers
 

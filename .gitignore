@@ -16,6 +16,8 @@ DerivedData/
 *.keystore
 *.jks
 generated/
+mail-engine/target/
+mail-engine/logs/
 stellar-mobile/generated/mobile/android/.gradle/
 stellar-mobile/generated/mobile/android/app/build/
 stellar-mobile/generated/mobile/ios/*.xcodeproj/

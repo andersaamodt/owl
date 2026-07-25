@@ -1,0 +1,56 @@
+#!/bin/sh
+set -eu
+
+script_path=$0
+while [ -L "$script_path" ]; do
+  link_target=$(readlink "$script_path") || break
+  case "$link_target" in
+    /*) script_path=$link_target ;;
+    *) script_path=$(dirname "$script_path")/$link_target ;;
+  esac
+done
+
+script_dir=$(CDPATH= cd -P -- "$(dirname "$script_path")" && pwd)
+repo_root=$(CDPATH= cd -P -- "$script_dir/.." && pwd)
+script_abs="$script_dir/$(basename "$script_path")"
+. "$repo_root/scripts/owl-paths.sh"
+
+has_env_flag=0
+for arg in "$@"; do
+  case "$arg" in
+    --env|--env=*) has_env_flag=1 ;;
+  esac
+done
+
+if command -v owl-daemon >/dev/null 2>&1; then
+  if [ "$has_env_flag" -eq 0 ] && [ -n "${OWL_ENV_PATH-}" ]; then
+    exec owl-daemon --env "$OWL_ENV_PATH" "$@"
+  fi
+  exec owl-daemon "$@"
+fi
+
+if command -v owld >/dev/null 2>&1; then
+  resolved_owld=$(command -v owld)
+  if [ "$resolved_owld" = "$script_abs" ]; then
+    resolved_owld=""
+  fi
+fi
+
+if [ -n "${resolved_owld-}" ]; then
+  if [ "$has_env_flag" -eq 0 ] && [ -n "${OWL_ENV_PATH-}" ]; then
+    exec "$resolved_owld" --env "$OWL_ENV_PATH" "$@"
+  fi
+  exec "$resolved_owld" "$@"
+fi
+
+if command -v cargo >/dev/null 2>&1 && [ -f "$repo_root/Cargo.toml" ]; then
+  cd "$repo_root"
+  if [ "$has_env_flag" -eq 0 ] && [ -n "${OWL_ENV_PATH-}" ]; then
+    exec sh "$repo_root/scripts/owl-cargo" run --quiet --bin owl-daemon -- --env "$OWL_ENV_PATH" "$@"
+  fi
+  exec sh "$repo_root/scripts/owl-cargo" run --quiet --bin owl-daemon -- "$@"
+fi
+
+printf '%s\n' "owld command not found and cargo fallback unavailable" >&2
+printf '%s\n' "install owl or run scripts/install-rust-toolchain first" >&2
+exit 1

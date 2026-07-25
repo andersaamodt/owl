@@ -842,6 +842,25 @@ swift_remote_server_setup_walkthrough_exists() {
   ! grep -Fq 'Section("Remote") {' $generated_macos/Sources/App/App.swift
 }
 
+swift_email_address_management_exists() {
+  cd "$repo_dir"
+  grep -Fq 'private struct ReceivingAddressSettings: Decodable, Sendable' $generated_macos/Sources/App/App.swift
+  grep -Fq 'private struct ReceivingAddress: Decodable, Identifiable, Sendable' $generated_macos/Sources/App/App.swift
+  grep -Fq 'Section("Receiving Addresses")' $generated_macos/Sources/App/App.swift
+  grep -Fq 'func saveReceivingAddress()' $generated_macos/Sources/App/App.swift
+  grep -Fq 'func setReceivingAddress(_ address: ReceivingAddress, enabled: Bool)' $generated_macos/Sources/App/App.swift
+  grep -Fq 'func deleteReceivingAddress(_ address: ReceivingAddress)' $generated_macos/Sources/App/App.swift
+  grep -Fq 'func setCatchAll(_ enabled: Bool)' $generated_macos/Sources/App/App.swift
+  grep -Fq 'func publishReceivingAddresses()' $generated_macos/Sources/App/App.swift
+  grep -Fq 'TextField("Forward copies to (optional, comma-separated)", text: $session.addressForwardsDraft)' $generated_macos/Sources/App/App.swift
+  grep -Fq 'Toggle("Accept mail to any unlisted address"' $generated_macos/Sources/App/App.swift
+  grep -Fq 'Catch-all is off by default because it receives more spam.' $generated_macos/Sources/App/App.swift
+  grep -Fq 'Label("Apply Addresses to Server", systemImage: "server.rack")' $generated_macos/Sources/App/App.swift
+  grep -Fq 'address-save' scripts/stellar-backend.sh scripts/stellar-mail-backend.sh
+  grep -Fq 'address-routing-plan' scripts/stellar-backend.sh scripts/stellar-mail-backend.sh
+  grep -Fq 'address-publish' scripts/stellar-backend.sh scripts/stellar-mail-backend.sh mail-engine/scripts/owl-desktop-backend.sh
+}
+
 linux_uses_native_gtk_and_argv_backend() {
   cd "$repo_dir"
   grep -q 'gtk_header_bar_new' $generated_linux/src/main.c
@@ -889,6 +908,7 @@ run_case "Native UI has no manual refresh controls" native_ui_has_no_manual_refr
 run_case "Swift uses toasts not status bar" swift_uses_toasts_not_status_bar
 run_case "Swift refresh is quiet and incremental" swift_refresh_is_quiet_and_incremental
 run_case "Swift remote server setup walkthrough exists" swift_remote_server_setup_walkthrough_exists
+run_case "Swift email address management exists" swift_email_address_management_exists
 run_case "Linux uses GTK native backend bridge" linux_uses_native_gtk_and_argv_backend
 run_case "Secure Chat hook has offline timeout" secure_chat_hook_has_offline_timeout
 
