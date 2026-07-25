@@ -8,11 +8,17 @@ tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/stellar-backend-test.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
 
 failures=0
+cases=0
 
 run_case() {
   name=$1
   shift
-  if "$@"; then
+  cases=$((cases + 1))
+  set +e
+  (set -e; "$@")
+  case_exit=$?
+  set -e
+  if [ "$case_exit" -eq 0 ]; then
     printf 'ok - %s\n' "$name"
   else
     printf 'not ok - %s\n' "$name" >&2
@@ -27,13 +33,13 @@ backend() {
   sh "$repo_dir/scripts/stellar-backend.sh" "$@"
 }
 
-backend_with_stellar() {
-  stellar_backend=$1
+backend_with_mail() {
+  mail_backend=$1
   shift
   HOME="$tmpdir/home" \
   XDG_STATE_HOME="$tmpdir/state" \
   XDG_CONFIG_HOME="$tmpdir/config" \
-  STELLAR_DESKTOP_BACKEND="$stellar_backend" \
+  STELLAR_MAIL_BACKEND="$mail_backend" \
   sh "$repo_dir/scripts/stellar-backend.sh" "$@"
 }
 
@@ -51,7 +57,7 @@ SH
   chmod +x "$binary"
 }
 
-write_fake_stellar_backend() {
+write_fake_mail_backend() {
   script=$1
   cat >"$script" <<'SH'
 #!/bin/sh
@@ -103,11 +109,92 @@ SH
   chmod +x "$script"
 }
 
+write_email_fixture() {
+  root=$1
+  list=$2
+  sender_dir=$3
+  ulid=$4
+  from=$5
+  subject=$6
+  received_at=$7
+  read=$8
+  body=$9
+  message_dir="$root/$list/$sender_dir"
+  case "$list" in
+    sent|outbox) message_dir="$root/$list" ;;
+  esac
+  mkdir -p "$message_dir"
+  printf '%s\n' "$body" >"$message_dir/$ulid.txt"
+  cat >"$message_dir/.message-$ulid.yml" <<YAML
+schema: 1
+ulid: $ulid
+status_shadow: $list
+read: $read
+starred: false
+received_at: $received_at
+headers_cache:
+  from: $from
+  subject: $subject
+render:
+  plain: $ulid.txt
+YAML
+}
+
 doctor_is_read_only() {
   root="$tmpdir/doctor/mail"
   mkdir -p "$tmpdir/home"
   output=$(backend doctor "$root")
-  printf '%s\n' "$output" | jq -e '.ok == true and .root == "'"$root"'"' >/dev/null
+  printf '%s\n' "$output" | jq -e '
+    .ok == true and
+    .root == "'"$root"'" and
+    .mail_backend.available == false and
+    .mail_backend.source == "missing"
+  ' >/dev/null
+  [ ! -e "$root" ]
+}
+
+snapshot_is_read_only_when_root_is_missing() {
+  root="$tmpdir/snapshot-read-only/mail"
+  mkdir -p "$tmpdir/home"
+  output=$(backend snapshot "$root")
+  printf '%s\n' "$output" | jq -e '
+    .ok == true and
+    .root == "'"$root"'" and
+    .settings.mail_backend.available == false and
+    .settings.folders_ready == false and
+    (.messages | length) == 0
+  ' >/dev/null
+  [ ! -e "$root" ]
+}
+
+missing_mail_backend_fails_email_actions_clearly() {
+  root="$tmpdir/missing-mail-engine/mail"
+  mkdir -p "$tmpdir/home"
+  if backend settings-set-domain "$root" example.org >"$tmpdir/missing-mail-engine.out" 2>"$tmpdir/missing-mail-engine.err"; then
+    return 1
+  fi
+  grep -q "no mail engine is installed" "$tmpdir/missing-mail-engine.err"
+  [ ! -e "$root" ]
+}
+
+configured_mail_backend_must_pass_health_check() {
+  root="$tmpdir/unhealthy-mail-engine/mail"
+  fake="$tmpdir/unhealthy-mail-engine.sh"
+  mkdir -p "$tmpdir/home"
+  cat >"$fake" <<'SH'
+#!/bin/sh
+printf '%s\n' 'not-json'
+SH
+  chmod +x "$fake"
+  output=$(backend_with_mail "$fake" doctor "$root")
+  printf '%s\n' "$output" | jq -e \
+    --arg path "$fake" '
+      .ok == true and
+      .mail_backend.available == false and
+      .mail_backend.configured == true and
+      .mail_backend.path == $path and
+      (.mail_backend.message | contains("health check"))
+    ' >/dev/null
   [ ! -e "$root" ]
 }
 
@@ -119,7 +206,8 @@ prepare_creates_shared_roots() {
     [ -d "$root/archive" ] &&
     [ -d "$root/.stellar/simplex/threads" ] &&
     [ -d "$root/.stellar/simplex/incoming" ] &&
-    [ -d "$root/.stellar/simplex/outbox" ]
+    [ -d "$root/.stellar/simplex/outbox" ] &&
+    [ "$(backend snapshot "$root" | jq -r '.settings.folders_ready')" = true ]
 }
 
 simplex_messages_share_one_timeline_and_inbox() {
@@ -221,13 +309,15 @@ EOF
     '.ok == true and .install_state == "installed" and .install_source == "wizardry" and .version == "vtest" and .binary_path == $binary' >/dev/null
 }
 
-snapshot_includes_stellar_mailboxes_drafts_events_settings() {
+snapshot_joins_local_mail_with_mail_backend_state() {
   root="$tmpdir/snapshot-mail/mail"
-  fake="$tmpdir/fake-stellar-backend.sh"
+  fake="$tmpdir/fake-mail-backend.sh"
   mkdir -p "$tmpdir/home"
-  write_fake_stellar_backend "$fake"
-  backend_with_stellar "$fake" prepare "$root" >/dev/null
-  snapshot=$(backend_with_stellar "$fake" snapshot "$root")
+  write_fake_mail_backend "$fake"
+  write_email_fixture "$root" accepted alice@example.org msg-1 "Alice <alice@example.org>" Hello 2026-04-20T10:00:00Z false "Email preview"
+  write_email_fixture "$root" archive bob@example.org msg-2 "Bob <bob@example.org>" Archived 2026-04-19T10:00:00Z true "Archived preview"
+  backend_with_mail "$fake" prepare "$root" >/dev/null
+  snapshot=$(backend_with_mail "$fake" snapshot "$root")
   printf '%s\n' "$snapshot" | jq -e '
     .ok == true and
     ([.mailboxes[] | select(.id == "accepted")][0].count == 1) and
@@ -235,69 +325,89 @@ snapshot_includes_stellar_mailboxes_drafts_events_settings() {
     (.drafts | length) == 1 and
     (.events | length) == 1 and
     .settings.domain == "example.org" and
+    .settings.mail_backend.available == true and
+    .settings.mail_backend.source == "override" and
     (.messages | map(select(.transport == "email")) | length) == 2
   ' >/dev/null
 }
 
 snapshot_reads_mail_sidecars_locally() {
   root="$tmpdir/snapshot-sidecars/mail"
-  mkdir -p "$tmpdir/home" "$root/accepted/alice@example.org" "$root/archive/bob@example.org"
-  cat >"$root/accepted/alice@example.org/.Hello (01A).yml" <<'YAML'
-schema: 1
-ulid: 01A
-status_shadow: accepted
-read: false
-starred: true
-received_at: 2026-05-25T07:00:00Z
-headers_cache:
-  from: Alice <alice@example.org>
-  subject: Hello
-YAML
-  cat >"$root/archive/bob@example.org/.Archived (01B).yml" <<'YAML'
-schema: 1
-ulid: 01B
-status_shadow: archive
-read: true
-received_at: 2026-05-24T07:00:00Z
-headers_cache:
-  from: Bob <bob@example.org>
-  subject: Archived
-YAML
+  mkdir -p "$tmpdir/home"
+  write_email_fixture "$root" accepted alice@example.org 01A "Alice <alice@example.org>" Hello 2026-05-25T07:00:00Z false "Hello locally"
+  write_email_fixture "$root" archive bob@example.org 01B "Bob <bob@example.org>" Archived 2026-05-24T07:00:00Z true "Archived locally"
   snapshot=$(backend snapshot "$root")
   printf '%s\n' "$snapshot" | jq -e '
     ([.mailboxes[] | select(.id == "accepted")][0].count == 1) and
     ([.mailboxes[] | select(.id == "archive")][0].count == 1) and
+    .overview.counts.inbox_messages == 1 and
+    .overview.counts.archive_messages == 1 and
+    .settings.unavailable == true and
+    .settings.mail_backend.available == false and
     (.messages | map(select(.transport == "email")) | length) == 2 and
     (.inbox | length) == 1
   ' >/dev/null
+}
+
+mail_sidecars_cannot_read_linked_or_parent_files() {
+  root="$tmpdir/snapshot-safe-paths/mail"
+  mkdir -p "$tmpdir/home"
+  write_email_fixture "$root" accepted alice@example.org 01C "Alice <alice@example.org>" Safe 2026-05-25T08:00:00Z false "safe body"
+  printf '%s\n' "outside secret" >"$tmpdir/outside-secret.txt"
+  rm "$root/accepted/alice@example.org/01C.txt"
+  ln -s "$tmpdir/outside-secret.txt" "$root/accepted/alice@example.org/01C.txt"
+
+  snapshot=$(backend snapshot "$root")
+  ! printf '%s\n' "$snapshot" | grep -q "outside secret"
+  email_id=$(printf '%s\n' "$snapshot" | jq -r '.inbox[0].id')
+  detail=$(backend message-detail "$root" "$email_id")
+  printf '%s\n' "$detail" | jq -e '.ok == true and .body == ""' >/dev/null
+
+  sed 's|plain: 01C.txt|plain: ../../outside-secret.txt|' \
+    "$root/accepted/alice@example.org/.message-01C.yml" >"$root/accepted/alice@example.org/.message-01C-parent.yml"
+  rm "$root/accepted/alice@example.org/.message-01C.yml"
+  snapshot=$(backend snapshot "$root")
+  ! printf '%s\n' "$snapshot" | grep -q "outside secret"
 }
 
 snapshot_lines_exposes_native_gtk_feed() {
   root="$tmpdir/snapshot-lines/mail"
   fake="$tmpdir/fake-stellar-lines.sh"
   mkdir -p "$tmpdir/home"
-  write_fake_stellar_backend "$fake"
-  backend_with_stellar "$fake" prepare "$root" >/dev/null
-  lines=$(backend_with_stellar "$fake" snapshot-lines "$root")
+  write_fake_mail_backend "$fake"
+  write_email_fixture "$root" accepted alice@example.org msg-1 "Alice <alice@example.org>" Hello 2026-04-20T10:00:00Z false "Email preview"
+  backend_with_mail "$fake" prepare "$root" >/dev/null
+  lines=$(backend_with_mail "$fake" snapshot-lines "$root")
   printf '%s\n' "$lines" | grep -q '^mailbox	accepted	Accepted	1	1$' &&
     printf '%s\n' "$lines" | grep -q '^inbox	.*	Alice	email	Hello	Email preview	2026-04-20T10:00:00Z$' &&
     printf '%s\n' "$lines" | grep -q '^draft	draft-1	alice@example.org	Draft note'
 }
 
-stellar_actions_are_hard_allowlisted_and_passthrough() {
+mail_backend_success_does_not_wait_for_timeout() {
+  root="$tmpdir/fast-mail-backend/mail"
+  fake="$tmpdir/fast-mail-backend.sh"
+  mkdir -p "$tmpdir/home"
+  write_fake_mail_backend "$fake"
+  started=$(date +%s)
+  STELLAR_MAIL_BACKEND_TIMEOUT_SECONDS=4 backend_with_mail "$fake" settings-controls "$root" >/dev/null
+  elapsed=$(($(date +%s) - started))
+  [ "$elapsed" -lt 3 ]
+}
+
+mail_backend_actions_are_hard_allowlisted_and_passthrough() {
   root="$tmpdir/passthrough/mail"
   fake="$tmpdir/fake-stellar-passthrough.sh"
   mkdir -p "$tmpdir/home"
-  write_fake_stellar_backend "$fake"
-  output=$(backend_with_stellar "$fake" settings-set-domain "$root" example.org)
+  write_fake_mail_backend "$fake"
+  output=$(backend_with_mail "$fake" settings-set-domain "$root" example.org)
   printf '%s\n' "$output" | jq -e '.ok == true and .domain == "example.org"' >/dev/null
-  output=$(backend_with_stellar "$fake" settings-remote-set-auth "$root" 1 0 "secret" user@example.org "$tmpdir/id_ed25519" 2222)
+  output=$(backend_with_mail "$fake" settings-remote-set-auth "$root" 1 0 "secret" user@example.org "$tmpdir/id_ed25519" 2222)
   printf '%s\n' "$output" | jq -e '.ok == true and .action == "settings-remote-set-auth" and .argc == 6' >/dev/null
-  output=$(backend_with_stellar "$fake" settings-remote-deploy "$root" user@example.org "$tmpdir/id_ed25519" "secret" 2222)
+  output=$(backend_with_mail "$fake" settings-remote-deploy "$root" user@example.org "$tmpdir/id_ed25519" "secret" 2222)
   printf '%s\n' "$output" | jq -e '.ok == true and .action == "settings-remote-deploy" and .argc == 4' >/dev/null
-  output=$(backend_with_stellar "$fake" settings-remote-send-test "$root" user@example.org "$tmpdir/id_ed25519" "secret" 2222)
+  output=$(backend_with_mail "$fake" settings-remote-send-test "$root" user@example.org "$tmpdir/id_ed25519" "secret" 2222)
   printf '%s\n' "$output" | jq -e '.ok == true and .action == "settings-remote-send-test" and .argc == 4' >/dev/null
-  if backend_with_stellar "$fake" arbitrary-shell "$root" >"$tmpdir/arbitrary.out" 2>"$tmpdir/arbitrary.err"; then
+  if backend_with_mail "$fake" arbitrary-shell "$root" >"$tmpdir/arbitrary.out" 2>"$tmpdir/arbitrary.err"; then
     return 1
   fi
   grep -q 'unsupported action' "$tmpdir/arbitrary.err"
@@ -320,14 +430,15 @@ message_detail_returns_simplex_and_email_messages() {
   root="$tmpdir/detail/mail"
   fake="$tmpdir/fake-stellar-detail.sh"
   mkdir -p "$tmpdir/home"
-  write_fake_stellar_backend "$fake"
-  backend_with_stellar "$fake" prepare "$root" >/dev/null
-  backend_with_stellar "$fake" bind-contact "$root" alice "Alice Ledger" person alice@example.org simplex://alice yes >/dev/null
-  backend_with_stellar "$fake" import-simplex "$root" alice "$(b64 'Encrypted detail')" false true "SimpleX detail" >/dev/null
-  simplex_id=$(backend_with_stellar "$fake" snapshot "$root" | jq -r '.inbox[] | select(.transport == "simplex") | .id' | head -n 1)
-  email_id=$(backend_with_stellar "$fake" snapshot "$root" | jq -r '.inbox[] | select(.transport == "email") | .id' | head -n 1)
-  backend_with_stellar "$fake" message-detail "$root" "$simplex_id" | jq -e '.ok == true and .transport == "simplex" and .body == "Encrypted detail"' >/dev/null
-  backend_with_stellar "$fake" get-message "$root" "$email_id" | jq -e '.ok == true and .transport == "email" and .body == "Full fake body"' >/dev/null
+  write_fake_mail_backend "$fake"
+  write_email_fixture "$root" accepted alice@example.org msg-1 "Alice <alice@example.org>" Hello 2026-04-20T10:00:00Z false "Full local body"
+  backend_with_mail "$fake" prepare "$root" >/dev/null
+  backend_with_mail "$fake" bind-contact "$root" alice "Alice Ledger" person alice@example.org simplex://alice yes >/dev/null
+  backend_with_mail "$fake" import-simplex "$root" alice "$(b64 'Encrypted detail')" false true "SimpleX detail" >/dev/null
+  simplex_id=$(backend_with_mail "$fake" snapshot "$root" | jq -r '.inbox[] | select(.transport == "simplex") | .id' | head -n 1)
+  email_id=$(backend_with_mail "$fake" snapshot "$root" | jq -r '.inbox[] | select(.transport == "email") | .id' | head -n 1)
+  backend_with_mail "$fake" message-detail "$root" "$simplex_id" | jq -e '.ok == true and .transport == "simplex" and .body == "Encrypted detail"' >/dev/null
+  backend_with_mail "$fake" get-message "$root" "$email_id" | jq -e '.ok == true and .transport == "email" and .body == "Full local body"' >/dev/null
 }
 
 simplex_tick_uses_transport_hook_for_poll_and_send() {
@@ -567,7 +678,7 @@ SH
   snapshot=$(backend snapshot "$root")
   printf '%s\n' "$snapshot" | jq -e '
     ([.threads[] | select(.id == "npub1visitor")][0].simplex_address == "secure-chat:26") and
-    ([.threads[] | select(.id == "npub1visitor")][0].contact_name == "Nostr Username") and
+    ([.threads[] | select(.id == "npub1visitor")][0].name == "Nostr Username") and
     (.inbox | map(select(.thread_id == "npub1visitor" and .body == "hello from website 🦉" and .attachments == 1 and .attachment.name == "probe-😀.txt")) | length) == 1 and
     (.messages | map(select(.body == "owner reply should not echo")) | length) == 0
   ' >/dev/null
@@ -677,6 +788,9 @@ invalid_action_fails() {
 }
 
 run_case "doctor is read-only" doctor_is_read_only
+run_case "snapshot is read-only when root is missing" snapshot_is_read_only_when_root_is_missing
+run_case "missing mail backend fails email actions clearly" missing_mail_backend_fails_email_actions_clearly
+run_case "configured mail backend must pass health check" configured_mail_backend_must_pass_health_check
 run_case "prepare creates shared roots" prepare_creates_shared_roots
 run_case "SimpleX messages share one timeline and inbox" simplex_messages_share_one_timeline_and_inbox
 run_case "SimpleX send queues without email fallback" simplex_send_queues_without_email_fallback
@@ -684,10 +798,12 @@ run_case "SimpleX inbox state does not move timeline messages" simplex_inbox_sta
 run_case "SimpleX trash stages a file for system Trash" simplex_trash_stages_file_for_system_trash
 run_case "bootstrap status is structured" bootstrap_status_is_structured
 run_case "bootstrap status detects Wizardry SimpleX install" bootstrap_status_detects_wizardry_simplex_install
-run_case "snapshot includes Stellar mailboxes, drafts, events, and settings" snapshot_includes_stellar_mailboxes_drafts_events_settings
+run_case "snapshot joins local mail with mail backend state" snapshot_joins_local_mail_with_mail_backend_state
 run_case "snapshot reads mail sidecars locally" snapshot_reads_mail_sidecars_locally
+run_case "mail sidecars cannot read linked or parent files" mail_sidecars_cannot_read_linked_or_parent_files
 run_case "snapshot lines exposes native GTK feed" snapshot_lines_exposes_native_gtk_feed
-run_case "Stellar actions are hard allowlisted and pass through" stellar_actions_are_hard_allowlisted_and_passthrough
+run_case "Mail backend actions are hard allowlisted and pass through" mail_backend_actions_are_hard_allowlisted_and_passthrough
+run_case "mail backend success does not wait for timeout" mail_backend_success_does_not_wait_for_timeout
 run_case "UI prefs are plaintext XDG state" ui_prefs_are_plaintext_xdg_state
 run_case "message detail returns SimpleX and email messages" message_detail_returns_simplex_and_email_messages
 run_case "SimpleX tick uses transport hook for poll and send" simplex_tick_uses_transport_hook_for_poll_and_send
@@ -704,4 +820,5 @@ if [ "$failures" -ne 0 ]; then
   exit 1
 fi
 
-printf '%s\n' "19/19 backend contract tests passed"
+passed=$((cases - failures))
+printf '%s\n' "$passed/$cases backend contract tests passed"

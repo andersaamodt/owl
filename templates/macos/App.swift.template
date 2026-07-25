@@ -366,44 +366,55 @@ private struct OverviewCounts: Decodable, Sendable {
 
 private struct SettingsSnapshot: Decodable, Sendable {
   var ok: Bool
+  var unavailable: Bool
+  var message: String
   var test_recipient: String
   var email_domain: String
   var domain_configured: Bool
   var ssl_ready: Bool
   var folders_ready: Bool
+  var mail_backend: MailBackendSettings
   var daemon: DaemonSettings
   var remote: RemoteSettings
   var remote_auth: RemoteAuthSettings
 
   init(
     ok: Bool = false,
+    unavailable: Bool = false,
+    message: String = "",
     test_recipient: String = "",
     email_domain: String = "",
     domain_configured: Bool = false,
     ssl_ready: Bool = false,
     folders_ready: Bool = false,
+    mail_backend: MailBackendSettings = MailBackendSettings(),
     daemon: DaemonSettings = DaemonSettings(),
     remote: RemoteSettings = RemoteSettings(),
     remote_auth: RemoteAuthSettings = RemoteAuthSettings()
   ) {
     self.ok = ok
+    self.unavailable = unavailable
+    self.message = message
     self.test_recipient = test_recipient
     self.email_domain = email_domain
     self.domain_configured = domain_configured
     self.ssl_ready = ssl_ready
     self.folders_ready = folders_ready
+    self.mail_backend = mail_backend
     self.daemon = daemon
     self.remote = remote
     self.remote_auth = remote_auth
   }
 
   private enum CodingKeys: String, CodingKey {
-    case ok, test_recipient, email_domain, domain, domain_configured, ssl_ready, folders_ready, daemon, remote, remote_auth
+    case ok, unavailable, message, test_recipient, email_domain, domain, domain_configured, ssl_ready, folders_ready, mail_backend, daemon, remote, remote_auth
   }
 
   init(from decoder: Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     ok = try values.decodeIfPresent(Bool.self, forKey: .ok) ?? false
+    unavailable = try values.decodeIfPresent(Bool.self, forKey: .unavailable) ?? false
+    message = try values.decodeIfPresent(String.self, forKey: .message) ?? ""
     test_recipient = try values.decodeIfPresent(String.self, forKey: .test_recipient) ?? ""
     email_domain = try values.decodeIfPresent(String.self, forKey: .email_domain)
       ?? values.decodeIfPresent(String.self, forKey: .domain)
@@ -411,10 +422,18 @@ private struct SettingsSnapshot: Decodable, Sendable {
     domain_configured = try values.decodeIfPresent(Bool.self, forKey: .domain_configured) ?? false
     ssl_ready = try values.decodeIfPresent(Bool.self, forKey: .ssl_ready) ?? false
     folders_ready = try values.decodeIfPresent(Bool.self, forKey: .folders_ready) ?? false
+    mail_backend = try values.decodeIfPresent(MailBackendSettings.self, forKey: .mail_backend) ?? MailBackendSettings()
     daemon = try values.decodeIfPresent(DaemonSettings.self, forKey: .daemon) ?? DaemonSettings()
     remote = try values.decodeIfPresent(RemoteSettings.self, forKey: .remote) ?? RemoteSettings()
     remote_auth = try values.decodeIfPresent(RemoteAuthSettings.self, forKey: .remote_auth) ?? RemoteAuthSettings()
   }
+}
+
+private struct MailBackendSettings: Decodable, Sendable {
+  var available: Bool = false
+  var path: String = ""
+  var source: String = "missing"
+  var message: String = "Email receiving and server administration require a mail engine that is not included in this build."
 }
 
 private struct DaemonSettings: Decodable, Sendable {
@@ -5634,13 +5653,6 @@ private struct MessageBubble: View {
       .fill(messageFill)
   }
 
-  private var messageTint: Color {
-    if message.from_self {
-      return .accentColor
-    }
-    return message.isSimpleX ? .green : .red
-  }
-
   private var messageFill: Color {
     session.bubbleFill(for: message)
   }
@@ -6388,7 +6400,21 @@ private struct SettingsView: View {
 
   private var emailPreferences: some View {
     Form {
-      Section("Email") {
+      Section("Email Engine") {
+        LabeledContent("Status", value: session.snapshot.settings.mail_backend.available ? "Ready" : "Unavailable")
+        if !session.snapshot.settings.mail_backend.available {
+          Text(session.snapshot.settings.mail_backend.message)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+      Section("Local Mail") {
+        LabeledContent("Folders", value: session.snapshot.settings.folders_ready ? "Ready" : "Missing")
+        Button { session.runBackendAction("settings-setup-folders", status: "Mail folders checked") } label: {
+          Label("Setup Folders", systemImage: "folder.badge.gearshape")
+        }
+      }
+      Section("Mail Server") {
         HStack {
           TextField("Domain", text: $session.settingsDomainDraft)
             .textFieldStyle(.roundedBorder)
@@ -6419,22 +6445,14 @@ private struct SettingsView: View {
               .foregroundStyle(.secondary)
             Text(session.snapshot.settings.ssl_ready ? "ready" : "not ready")
           }
-          GridRow {
-            Text("Folders")
-              .foregroundStyle(.secondary)
-            Text(session.snapshot.settings.folders_ready ? "ready" : "missing")
-          }
         }
-        HStack {
-          Button { session.runBackendAction("settings-setup-folders", status: "Mail folders checked") } label: {
-            Label("Setup Folders", systemImage: "folder.badge.gearshape")
-          }
-          Button { session.setupTLSForCurrentServer() } label: {
-            Label("Setup TLS", systemImage: "lock.shield")
-          }
+        Button { session.setupTLSForCurrentServer() } label: {
+          Label("Setup TLS", systemImage: "lock.shield")
         }
       }
+      .disabled(!session.snapshot.settings.mail_backend.available)
       TLSSetupWalkthroughView()
+        .disabled(!session.snapshot.settings.mail_backend.available)
     }
     .formStyle(.grouped)
     .padding(.top, 8)
@@ -6477,9 +6495,11 @@ private struct SettingsView: View {
           .fixedSize()
         }
       }
+      .disabled(!session.snapshot.settings.mail_backend.available)
       Section("Remote Mail Server") {
         RemoteServerWalkthroughView()
       }
+      .disabled(!session.snapshot.settings.mail_backend.available)
     }
     .formStyle(.grouped)
     .padding(.top, 8)

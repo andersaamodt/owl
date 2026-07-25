@@ -278,7 +278,7 @@ public final class MainActivity extends Activity {
 
     private void addRemoteSetup(LinearLayout root) {
         root.addView(sectionTitle("Remote Mail Server"));
-        root.addView(bodyText("Step through the same Stellar remote setup flow from mobile: connect to an Stellar backend bridge, save SSH details, save authentication, deploy, verify, set up TLS with DNS records checked first, send a test email, then check remote mail."));
+        root.addView(bodyText("Connect to a Stellar backend bridge to configure a remote mail server. Deployment, TLS, test, and sync actions require the bridge host to have a compatible mail engine configured."));
 
         remoteBridgeUrl = field("https://stellar.example.org/backend", "remote.bridgeUrl");
         remoteHost = field("user@203.0.113.8", "remote.host");

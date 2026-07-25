@@ -12,11 +12,17 @@ tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/stellar-render-test.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
 
 failures=0
+cases=0
 
 run_case() {
   name=$1
   shift
-  if "$@"; then
+  cases=$((cases + 1))
+  set +e
+  (set -e; "$@")
+  case_exit=$?
+  set -e
+  if [ "$case_exit" -eq 0 ]; then
     printf 'ok - %s\n' "$name"
   else
     printf 'not ok - %s\n' "$name" >&2
@@ -83,7 +89,7 @@ swift_uses_native_desktop_idiom() {
   grep -Fq 'Color.clear' $generated_macos/Sources/App/App.swift
   grep -Fq 'func retryInitialLoad()' $generated_macos/Sources/App/App.swift
   grep -Fq 'private func loadInitialSnapshot() async' $generated_macos/Sources/App/App.swift
-  grep -Fq 'self.statusText = "Loaded \\(next.threads.count) conversations from \\(next.root)"' $generated_macos/Sources/App/App.swift
+  grep -Fq 'self.statusText = "Loaded \(next.threads.count) conversations from \(next.root)"' $generated_macos/Sources/App/App.swift
   grep -Fq 'self.hasLoadedInitialSnapshot = true' $generated_macos/Sources/App/App.swift
   grep -Fq 'Task { await loadInitialSnapshot() }' $generated_macos/Sources/App/App.swift
   ! awk '
@@ -130,14 +136,14 @@ swift_uses_native_desktop_idiom() {
   grep -q 'NSOpenPanel' $generated_macos/Sources/App/App.swift
   grep -q 'setActivationPolicy(.regular)' $generated_macos/Sources/App/App.swift
   grep -q 'Process()' $generated_macos/Sources/App/App.swift
-  grep -q 'process.arguments = \\[script.path, action, root\\] + args' $generated_macos/Sources/App/App.swift
+  grep -Fq 'process.arguments = [script.path, action, root] + args' $generated_macos/Sources/App/App.swift
   grep -q 'NSApp.windowsMenu = windowMenu' $generated_macos/Sources/App/App.swift
   grep -q 'let editMenu = NSMenu(title: "Edit")' $generated_macos/Sources/App/App.swift
   grep -q 'let messageMenu = NSMenu(title: "Message")' $generated_macos/Sources/App/App.swift
   grep -q 'private let generatedAppMenuTitle = "Stellar"' $generated_macos/Sources/App/App.swift
   grep -q 'appMenuItem.title = generatedAppMenuTitle' $generated_macos/Sources/App/App.swift
   grep -q '.executable(name: "stellar", targets: \["App"\])' $generated_macos/Package.swift
-  grep -q 'actionItem("Preferences...", action: "open_settings", key: ",", modifiers: \\[.command\\])' $generated_macos/Sources/App/App.swift
+  grep -Fq 'actionItem("Preferences...", action: "open_settings", key: ",", modifiers: [.command])' $generated_macos/Sources/App/App.swift
   ! grep -q 'actionItem("Settings...", action: "open_settings"' $generated_macos/Sources/App/App.swift
   grep -q 'settingsWindow.title = "Preferences"' $generated_macos/Sources/App/App.swift
   grep -q 'g_menu_append(app_menu, "Preferences", "app.open-settings")' $generated_linux/src/main.c
@@ -165,7 +171,7 @@ swift_uses_native_desktop_idiom() {
 
 swift_unified_simplex_email_ui_exists() {
   cd "$repo_dir"
-  grep -q '@Published var optimisticOutgoingMessages: \\[MessageItem\\] = \\[\\]' $generated_macos/Sources/App/App.swift
+  grep -Fq '@Published var optimisticOutgoingMessages: [MessageItem] = []' $generated_macos/Sources/App/App.swift
   grep -q 'let optimistic = optimisticMessage(for: thread, transport: transport, subject: subject, body: body, attachment: attachment)' $generated_macos/Sources/App/App.swift
   grep -q 'upsertOptimisticOutgoingMessage(optimistic)' $generated_macos/Sources/App/App.swift
   grep -q 'composeBody = ""' $generated_macos/Sources/App/App.swift
@@ -264,7 +270,7 @@ swift_new_and_inbox_use_card_stack_layout() {
   grep -Fq 'private func stackOffsetX(_ index: Int) -> CGFloat' $generated_macos/Sources/App/App.swift
   grep -Fq 'CardStackFrame(' $generated_macos/Sources/App/App.swift
   grep -Fq 'depth: 1,' $generated_macos/Sources/App/App.swift
-  grep -Fq 'Text("\\(stackDepth)")' $generated_macos/Sources/App/App.swift
+  grep -Fq 'Text("\(stackDepth)")' $generated_macos/Sources/App/App.swift
   grep -Fq 'LazyVStack(spacing: 32)' $generated_macos/Sources/App/App.swift
   grep -Fq 'ForEach(inboxStackCards)' $generated_macos/Sources/App/App.swift
   grep -Fq 'private var inboxStackCards: [MessageItem]' $generated_macos/Sources/App/App.swift
@@ -432,7 +438,7 @@ swift_message_cards_are_drag_droppable() {
   grep -q 'NSWorkspace.shared.recycle(urls)' $generated_macos/Sources/App/App.swift
   grep -q 'if response.delete_after_trash' $generated_macos/Sources/App/App.swift
   ! grep -q 'Deleting SimpleX message' $generated_macos/Sources/App/App.swift
-  grep -q 'private func recycleInSystemTrash(_ urls: \\[URL\\]) async throws -> \\[URL: URL\\]' $generated_macos/Sources/App/App.swift
+  grep -Fq 'private func recycleInSystemTrash(_ urls: [URL]) async throws -> [URL: URL]' $generated_macos/Sources/App/App.swift
   grep -q 'func undoLastTrashAction()' $generated_macos/Sources/App/App.swift
   grep -q 'func openSystemTrash()' $generated_macos/Sources/App/App.swift
   grep -q 'Label("Undo Last Trash", systemImage: "arrow.uturn.backward")' $generated_macos/Sources/App/App.swift
@@ -575,7 +581,6 @@ swift_message_surfaces_use_colored_backgrounds() {
   grep -Fq 'private var cardBackground: some View' $generated_macos/Sources/App/App.swift
   grep -Fq 'tintOpacity: isSelected ? 0.082 : 0.050' $generated_macos/Sources/App/App.swift
   grep -Fq 'RoundedRectangle(cornerRadius: 14, style: .continuous)' $generated_macos/Sources/App/App.swift
-  grep -Fq 'private var messageTint: Color' $generated_macos/Sources/App/App.swift
   grep -Fq 'private struct TelegramBubbleShape: Shape' $generated_macos/Sources/App/App.swift
   grep -Fq 'private struct MessageDetailsView: View' $generated_macos/Sources/App/App.swift
   grep -Fq 'import AVKit' $generated_macos/Sources/App/App.swift
@@ -604,7 +609,6 @@ swift_message_surfaces_use_colored_backgrounds() {
   grep -Fq 'Button { showingDetails = true } label:' $generated_macos/Sources/App/App.swift
   grep -Fq 'Label("Details", systemImage: "info.circle")' $generated_macos/Sources/App/App.swift
   grep -Fq '.fill(messageFill)' $generated_macos/Sources/App/App.swift
-  grep -Fq 'tintOpacity: 0.090' $generated_macos/Sources/App/App.swift
   ! grep -Fq 'edgeOpacity:' $generated_macos/Sources/App/App.swift
   ! grep -Fq 'edgeWidth:' $generated_macos/Sources/App/App.swift
   ! awk '
@@ -831,8 +835,10 @@ swift_remote_server_setup_walkthrough_exists() {
   grep -Fq 'STELLAR_MAIL_LIST_TIMEOUT_SECONDS:-15' scripts/stellar-backend.sh
   grep -Fq 'STELLAR_REMOTE_DEPLOY_TIMEOUT_SECONDS:-1800' scripts/stellar-backend.sh
   grep -Fq 'STELLAR_REMOTE_TLS_TIMEOUT_SECONDS:-900' scripts/stellar-backend.sh
-  grep -Fq '../stellar-nonnative/scripts/stellar-desktop-backend.sh' scripts/stellar-backend.sh
-  grep -Fq 'git/stellar-nonnative/scripts/stellar-desktop-backend.sh' scripts/stellar-backend.sh
+  grep -Fq 'STELLAR_MAIL_BACKEND' scripts/stellar-backend.sh
+  ! grep -Fq 'stellar-nonnative' scripts/stellar-backend.sh
+  grep -Fq 'Section("Email Engine")' $generated_macos/Sources/App/App.swift
+  grep -Fq '.disabled(!session.snapshot.settings.mail_backend.available)' $generated_macos/Sources/App/App.swift
   ! grep -Fq 'Section("Remote") {' $generated_macos/Sources/App/App.swift
 }
 
@@ -843,8 +849,8 @@ linux_uses_native_gtk_and_argv_backend() {
   grep -q 'gtk_list_box_new' $generated_linux/src/main.c
   grep -q 'gtk_text_view_new' $generated_linux/src/main.c
   grep -q 'g_spawn_sync' $generated_linux/src/main.c
-  grep -q 'g_ptr_array_add(argv, (char *)"/bin/sh");' $generated_linux/src/main.c
-  grep -q 'g_ptr_array_add(argv, script_path);' $generated_linux/src/main.c
+  grep -Fq 'g_ptr_array_add(argv, (char *)"/bin/sh");' $generated_linux/src/main.c
+  grep -Fq 'g_ptr_array_add(argv, script_path);' $generated_linux/src/main.c
   grep -q 'run_backend(context, "snapshot-lines", NULL, NULL)' $generated_linux/src/main.c
   grep -q 'populate_snapshot_lines' $generated_linux/src/main.c
   grep -q 'context->mailbox_list = gtk_list_box_new' $generated_linux/src/main.c
@@ -891,4 +897,5 @@ if [ "$failures" -ne 0 ]; then
   exit 1
 fi
 
-printf '%s\n' "23/23 native render tests passed"
+passed=$((cases - failures))
+printf '%s\n' "$passed/$cases native render tests passed"

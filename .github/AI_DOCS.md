@@ -39,15 +39,18 @@
 
 ### Runtime And Bridge Ownership
 - Backend action surface: `scripts/stellar-backend.sh` plus typed runtime contract scripts
+- Mail corpus reads: `scripts/stellar-backend.sh` is the arche and reads the file-first corpus directly.
+- Mail mutations, transport, and server administration: an explicit mail-engine adapter selected by `STELLAR_MAIL_BACKEND`; no compatible engine is bundled yet.
 - Backend path resolution owner: theurgy or native-host and backend contracts
 - Shell-fragment policy: explicit backend actions only
 - Native/generated boundary: generated native desktop and mobile shells around a shell backend and typed runtime contracts
+- Negative space: Stellar does not discover sibling repositories, infer a mail engine from checkout layout, or claim that email receiving is ready when the engine is absent.
 
 ### Tests
 - Test entrypoints under `.tests/`: yes
 - Backend contract coverage: yes
 - UI/static/native-shell coverage: yes
-- Known gaps: the desktop UI prefs path remains a documented storage exception
+- Known gaps: the desktop UI prefs path remains a documented storage exception; a production mail engine is not bundled.
 
 ### Release, Build, Generated Output, And Cruft
 - Release artifact root: operator-local release outputs only
@@ -62,4 +65,5 @@
 
 ### Pending Decisions
 - Decide whether desktop UI prefs stay in the XDG config root or migrate fully into the `~/mail`-owned Stellar contract.
-- Continue moving status, snapshot, settings-control, and long-running transport operations behind typed runtime request paths.
+- Decide whether the production mail engine becomes a component of this repository or a separately versioned dependency.
+- Decide whether managed receiving addresses are aliases into one Stellar inbox, isolated local mailboxes, forwarding routes, or a supported combination.

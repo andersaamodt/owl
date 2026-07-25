@@ -34,8 +34,8 @@ Stellar now carries a first-phase Theurgy project contract in
 - Marks email as an open-lock transport and requires explicitly choosing it.
 - Stores mail and messaging data under a local mail root, defaulting to
   `~/mail`.
-- Includes remote mail server setup flows for provisioning, verifying, syncing,
-  and sending a test message against an SSH target.
+- Presents remote mail server setup flows when a compatible mail engine is
+  configured.
 
 ## Getting Stellar
 
@@ -65,6 +65,26 @@ The local SimpleX hook is `scripts/stellar-simplex-local-hook.sh`. Stellar can a
 with a remote Secure Chat daemon over SSH through
 `scripts/stellar-secure-chat-hook.sh`; hosts and remote commands must be configured
 explicitly and are not baked into the repository.
+
+### Email engine status
+
+Stellar reads the file-first mail corpus directly, so an existing `~/mail`
+archive remains browsable without another project checkout. Sending email,
+receiving new mail, changing message state, and administering a local or remote
+mail server require a mail engine.
+
+This repository does not currently ship that engine. Development builds may
+select one explicitly:
+
+```sh
+STELLAR_MAIL_BACKEND=/absolute/path/to/compatible-mail-backend.sh \
+  sh scripts/stellar-backend.sh doctor ~/mail
+```
+
+`doctor` runs the engine's read-only `health` action. It and the native Email
+settings report the engine as unavailable when it is absent or unhealthy.
+Stellar no longer searches sibling repositories or silently presents server
+controls as operational.
 
 ## For Developers
 

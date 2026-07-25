@@ -8,11 +8,17 @@ tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/stellar-ir-test.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
 
 failures=0
+cases=0
 
 run_case() {
   name=$1
   shift
-  if "$@"; then
+  cases=$((cases + 1))
+  set +e
+  (set -e; "$@")
+  case_exit=$?
+  set -e
+  if [ "$case_exit" -eq 0 ]; then
     printf 'ok - %s\n' "$name"
   else
     printf 'not ok - %s\n' "$name" >&2
@@ -72,4 +78,5 @@ if [ "$failures" -ne 0 ]; then
   exit 1
 fi
 
-printf '%s\n' "5/5 native IR contract tests passed"
+passed=$((cases - failures))
+printf '%s\n' "$passed/$cases native IR contract tests passed"

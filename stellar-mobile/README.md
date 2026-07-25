@@ -11,7 +11,10 @@ The generated mobile apps include a Remote Setup walkthrough and backend bridge
 client for saving the SSH target/auth details and running the same deploy,
 verify, remote TLS, test email, and remote mail sync actions from mobile.
 The bridge endpoint can be backed by [scripts/stellar-mobile-backend-bridge.sh](../scripts/stellar-mobile-backend-bridge.sh),
-which dispatches the same allowlisted Stellar backend actions used by the desktop app.
+which dispatches the same allowlisted Stellar backend actions used by the
+desktop app. Email deployment and receiving actions work only when the bridge
+host explicitly configures a compatible `STELLAR_MAIL_BACKEND`; Stellar does
+not bundle or discover one.
 
 - Development context: native-mobile
 - License: dual `OWL 3.1 OR AGPL-3.0-or-later`; AGPL use includes the

@@ -323,6 +323,16 @@ ensure_roots() {
   mkdir -p "$ROOT/archive" "$ROOT/trash" "$ROOT/drafts" "$ROOT/outbox" "$ROOT/sent" "$ROOT/logs"
 }
 
+local_mail_folders_ready() {
+  for dir in quarantine accepted spam banned archive trash drafts outbox sent logs; do
+    [ -d "$ROOT/$dir" ] || {
+      printf 'false\n'
+      return
+    }
+  done
+  printf 'true\n'
+}
+
 safe_slug() {
   raw=${1-}
   cleaned=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9._@-' '-')
@@ -459,21 +469,14 @@ decode_b64_to_file() {
   return 1
 }
 
-resolve_stellar_backend_script() {
-  if [ -n "${STELLAR_DESKTOP_BACKEND-}" ] && [ -f "$STELLAR_DESKTOP_BACKEND" ]; then
-    printf '%s\n' "$STELLAR_DESKTOP_BACKEND"
-    return 0
-  fi
-  if [ -n "${STELLAR_SOURCE_ROOT-}" ] && [ -f "$STELLAR_SOURCE_ROOT/scripts/stellar-desktop-backend.sh" ]; then
-    printf '%s\n' "$STELLAR_SOURCE_ROOT/scripts/stellar-desktop-backend.sh"
+resolve_mail_backend_script() {
+  if [ -n "${STELLAR_MAIL_BACKEND-}" ] && [ -f "$STELLAR_MAIL_BACKEND" ]; then
+    printf '%s\n' "$STELLAR_MAIL_BACKEND"
     return 0
   fi
   for candidate in \
-    "$repo_dir/vendor/stellar/scripts/stellar-desktop-backend.sh" \
-    "$repo_dir/../stellar-nonnative/scripts/stellar-desktop-backend.sh" \
-    "$repo_dir/../stellar/scripts/stellar-desktop-backend.sh" \
-    "$home/git/stellar-nonnative/scripts/stellar-desktop-backend.sh" \
-    "$home/git/stellar/scripts/stellar-desktop-backend.sh"
+    "$repo_dir/scripts/stellar-mail-backend.sh" \
+    "$repo_dir/libexec/stellar-mail-backend.sh"
   do
     if [ -f "$candidate" ]; then
       printf '%s\n' "$candidate"
@@ -483,7 +486,33 @@ resolve_stellar_backend_script() {
   return 1
 }
 
-stellar_backend_timeout_seconds() {
+mail_backend_status_json() {
+  backend_path=$(resolve_mail_backend_script || true)
+  if [ -n "$backend_path" ]; then
+    case "$backend_path" in
+      "$repo_dir"/*) backend_source=bundled ;;
+      *) backend_source=override ;;
+    esac
+    backend_health=$(mail_backend_json health 2>/dev/null || true)
+    if [ -n "$backend_health" ] &&
+      printf '%s\n' "$backend_health" | jq -e '.ok == true' >/dev/null 2>&1; then
+      jq -n \
+        --arg path "$backend_path" \
+        --arg source "$backend_source" \
+        '{available:true,configured:true,path:$path,source:$source,message:""}'
+    else
+      jq -n \
+        --arg path "$backend_path" \
+        --arg source "$backend_source" \
+        '{available:false,configured:true,path:$path,source:$source,message:"The configured mail engine did not pass its health check."}'
+    fi
+    return
+  fi
+  jq -n \
+    '{available:false,configured:false,path:"",source:"missing",message:"Email receiving and server administration require a mail engine that is not included in this build."}'
+}
+
+mail_backend_timeout_seconds() {
   case "$stellar_action" in
     list-messages|list-messages-fast|list-inbox-bundle-fast|list-archive-bundle)
       printf '%s\n' "${STELLAR_MAIL_LIST_TIMEOUT_SECONDS:-15}"
@@ -501,63 +530,95 @@ stellar_backend_timeout_seconds() {
       printf '%s\n' "${STELLAR_LLM_ACTION_TIMEOUT_SECONDS:-900}"
       ;;
     *)
-      printf '%s\n' "${STELLAR_STELLAR_TIMEOUT_SECONDS:-5}"
+      printf '%s\n' "${STELLAR_MAIL_BACKEND_TIMEOUT_SECONDS:-5}"
       ;;
   esac
 }
 
-stellar_backend_json() {
+terminate_process_tree() {
+  process_root=$1
+  descendants=$(
+    ps -eo pid=,ppid= 2>/dev/null |
+      awk -v root="$process_root" '
+        { parent[$1] = $2 }
+        END {
+          for (pid in parent) {
+            current = pid
+            while (current in parent) {
+              if (parent[current] == root) {
+                print pid
+                break
+              }
+              current = parent[current]
+            }
+          }
+        }
+      '
+  )
+  if [ -n "$descendants" ]; then
+    kill $descendants 2>/dev/null || true
+  fi
+  kill "$process_root" 2>/dev/null || true
+}
+
+mail_backend_json() {
   stellar_action=$1
   shift || true
-  script=$(resolve_stellar_backend_script || true)
-  [ -n "$script" ] || return 127
-  timeout_seconds=$(stellar_backend_timeout_seconds)
+  script=$(resolve_mail_backend_script || true)
+  if [ -z "$script" ]; then
+    printf '%s\n' "stellar-backend: email action '$stellar_action' is unavailable: no mail engine is installed" >&2
+    return 127
+  fi
+  timeout_seconds=$(mail_backend_timeout_seconds)
   case "$timeout_seconds" in ''|*[!0123456789]*) timeout_seconds=1 ;; esac
   if command -v timeout >/dev/null 2>&1; then
     timeout "$timeout_seconds" sh "$script" "$stellar_action" "$ROOT" "$@"
     return $?
   fi
-  tmp_out=$(mktemp "${TMPDIR:-/tmp}/stellar-stellar-out.XXXXXX")
-  tmp_err=$(mktemp "${TMPDIR:-/tmp}/stellar-stellar-err.XXXXXX")
-  timeout_marker=$(mktemp "${TMPDIR:-/tmp}/stellar-stellar-timeout.XXXXXX")
-  rm -f "$timeout_marker"
+  tmp_out=$(mktemp "${TMPDIR:-/tmp}/stellar-mail-backend-out.XXXXXX")
+  tmp_err=$(mktemp "${TMPDIR:-/tmp}/stellar-mail-backend-err.XXXXXX")
   sh "$script" "$stellar_action" "$ROOT" "$@" >"$tmp_out" 2>"$tmp_err" &
   backend_pid=$!
-  (
-    sleep "$timeout_seconds"
-    printf 'timeout\n' >"$timeout_marker"
-    kill "$backend_pid" >/dev/null 2>&1 || true
-  ) &
-  killer_pid=$!
+  timeout_ticks=$((timeout_seconds * 10))
+  elapsed_ticks=0
+  backend_timed_out=false
+  while kill -0 "$backend_pid" 2>/dev/null; do
+    if [ "$elapsed_ticks" -ge "$timeout_ticks" ]; then
+      backend_timed_out=true
+      terminate_process_tree "$backend_pid"
+      break
+    fi
+    sleep 0.1
+    elapsed_ticks=$((elapsed_ticks + 1))
+  done
   if wait "$backend_pid"; then
     backend_status=0
   else
     backend_status=$?
   fi
-  kill "$killer_pid" >/dev/null 2>&1 || true
-  wait "$killer_pid" 2>/dev/null || true
   cat "$tmp_out"
   cat "$tmp_err" >&2
-  if [ -f "$timeout_marker" ] && [ "$backend_status" -ne 0 ]; then
+  if [ "$backend_timed_out" = true ]; then
     backend_status=124
   fi
-  rm -f "$tmp_out" "$tmp_err" "$timeout_marker"
+  rm -f "$tmp_out" "$tmp_err"
   return "$backend_status"
 }
 
-stellar_backend_json_or_empty() {
-  out=$(stellar_backend_json "$@" 2>/dev/null || true)
+mail_backend_json_or_empty() {
+  out=$(mail_backend_json "$@" 2>/dev/null || true)
   if [ -n "$out" ] && printf '%s\n' "$out" | jq -e . >/dev/null 2>&1; then
     printf '%s\n' "$out"
   else
-    jq -n '{ok:false,unavailable:true}'
+    jq -n \
+      '{ok:false,unavailable:true,message:"Email receiving and server administration require a mail engine that is not included in this build."}'
   fi
 }
 
-stellar_backend_array_field_or_empty() {
+mail_backend_array_field_or_empty() {
   field=$1
   shift
-  out=$(stellar_backend_json "$@" 2>/dev/null || true)
+  out=$(mail_backend_json "$@" 2>/dev/null || true)
   array=
   if [ -n "$out" ]; then
     array=$(printf '%s\n' "$out" | jq -c --arg field "$field" '.[$field] // []' 2>/dev/null || true)
@@ -566,31 +627,6 @@ stellar_backend_array_field_or_empty() {
     printf '%s\n' "$array"
   else
     printf '[]\n'
-  fi
-}
-
-empty_stellar_messages() {
-  jq -n --arg list "${1:-}" '{ok:true,list:$list,messages:[]}'
-}
-
-empty_stellar_overview() {
-  jq -n --arg root "$ROOT" '{ok:true,root:$root,counts:{new_senders:0,new_messages:0,inbox_messages:0,spam_senders:0,spam_messages:0,archive_messages:0,trash_messages:0,drafts:0,outbox:0,sent:0}}'
-}
-
-stellar_messages_for_list() {
-  list=$1
-  if out=$(stellar_backend_json list-messages "$list" 2>/dev/null); then
-    printf '%s\n' "$out"
-  else
-    empty_stellar_messages "$list"
-  fi
-}
-
-stellar_overview() {
-  if out=$(stellar_backend_json overview 2>/dev/null); then
-    printf '%s\n' "$out"
-  else
-    empty_stellar_overview
   fi
 }
 
@@ -830,34 +866,19 @@ rewrite_simplex_message_field() {
   [ "$found" -eq 1 ]
 }
 
-collect_email_messages_jsonl() {
-  for list in accepted quarantine spam banned archive sent trash outbox spam-review; do
-    stellar_messages_for_list "$list" | jq -c --arg list "$list" '.messages[]? | . + {native_source_list:$list}'
-  done
-}
-
 collect_email_lists_json() {
-  if [ -z "${STELLAR_DESKTOP_BACKEND-}" ]; then
-    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/stellar-email-lists.XXXXXX")
-    for list in accepted quarantine spam banned archive sent outbox trash; do
-      local_mail_sidecar_records "$list" "$tmp_dir/$list.index"
-    done
-    cat "$tmp_dir/spam.index" "$tmp_dir/banned.index" 2>/dev/null >"$tmp_dir/spam-review.index" || true
-    : >"$tmp_dir/lists.jsonl"
-    for list in accepted quarantine spam banned archive sent outbox trash spam-review; do
-      messages=$(json_array_from_record_index "$tmp_dir/$list.index")
-      jq -cn --arg id "$list" --argjson messages "$messages" '{id:$id,messages:$messages}' >>"$tmp_dir/lists.jsonl"
-    done
-    jq -s '.' "$tmp_dir/lists.jsonl"
-    rm -rf "$tmp_dir"
-    return 0
-  fi
-  tmp=$(mktemp "${TMPDIR:-/tmp}/stellar-email-lists.XXXXXX")
-  for list in accepted quarantine spam banned archive sent outbox trash spam-review; do
-    stellar_messages_for_list "$list" | jq -c --arg id "$list" '{id:$id,messages:(.messages // [])}' >>"$tmp"
+  tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/stellar-email-lists.XXXXXX")
+  for list in accepted quarantine spam banned archive sent outbox trash; do
+    local_mail_sidecar_records "$list" "$tmp_dir/$list.index"
   done
-  jq -s '.' "$tmp"
-  rm -f "$tmp"
+  cat "$tmp_dir/spam.index" "$tmp_dir/banned.index" 2>/dev/null >"$tmp_dir/spam-review.index" || true
+  : >"$tmp_dir/lists.jsonl"
+  for list in accepted quarantine spam banned archive sent outbox trash spam-review; do
+    messages=$(json_array_from_record_index "$tmp_dir/$list.index")
+    jq -cn --arg id "$list" --argjson messages "$messages" '{id:$id,messages:$messages}' >>"$tmp_dir/lists.jsonl"
+  done
+  jq -s '.' "$tmp_dir/lists.jsonl"
+  rm -rf "$tmp_dir"
 }
 
 mailbox_summary_json() {
@@ -886,15 +907,47 @@ collect_email_messages_from_lists_jsonl() {
   jq -c '.[] | .id as $list | (.messages // [])[] | . + {native_source_list:$list}'
 }
 
+overview_from_email_lists() {
+  drafts=$1
+  jq -c \
+    --arg root "$ROOT" \
+    --argjson drafts "$drafts" '
+      def messages($id): first(.[] | select(.id == $id) | .messages) // [];
+      def senders($id): messages($id) | map(.sender) | map(select(length > 0)) | unique | length;
+      {
+        ok:true,
+        root:$root,
+        counts:{
+          new_senders:senders("quarantine"),
+          new_messages:(messages("quarantine") | length),
+          inbox_messages:(messages("accepted") | length),
+          spam_senders:(senders("spam") + senders("banned")),
+          spam_messages:((messages("spam") | length) + (messages("banned") | length)),
+          archive_messages:(messages("archive") | length),
+          trash_messages:(messages("trash") | length),
+          drafts:($drafts | length),
+          outbox:(messages("outbox") | length),
+          sent:(messages("sent") | length)
+        }
+      }
+    '
+}
+
 snapshot_action() {
-  ensure_roots
   contacts_json=$(contacts_json_array)
-  overview_json=$(stellar_overview)
   email_lists_json=$(collect_email_lists_json)
   mailboxes_json=$(printf '%s\n' "$email_lists_json" | mailbox_summary_json)
-  drafts_json=$(stellar_backend_array_field_or_empty drafts draft-list)
-  events_json=$(stellar_backend_array_field_or_empty events event-feed 80)
-  settings_json=$(stellar_backend_json_or_empty settings-controls)
+  drafts_json=$(mail_backend_array_field_or_empty drafts draft-list)
+  events_json=$(mail_backend_array_field_or_empty events event-feed 80)
+  settings_json=$(mail_backend_json_or_empty settings-controls)
+  mail_backend_json_value=$(mail_backend_status_json)
+  folders_ready=$(local_mail_folders_ready)
+  settings_json=$(printf '%s\n' "$settings_json" |
+    jq -c \
+      --argjson mail_backend "$mail_backend_json_value" \
+      --argjson folders_ready "$folders_ready" \
+      '. + {mail_backend:$mail_backend,folders_ready:$folders_ready}')
+  overview_json=$(printf '%s\n' "$email_lists_json" | overview_from_email_lists "$drafts_json")
   prefs_json=$(ui_prefs_action)
   tmp_email=$(mktemp "${TMPDIR:-/tmp}/stellar-email.XXXXXX")
   tmp_simplex=$(mktemp "${TMPDIR:-/tmp}/stellar-simplex.XXXXXX")
@@ -1114,10 +1167,10 @@ send_message_action() {
 
   [ -n "$email" ] || usage_error "Email transport selected but no email address is bound for $name"
   # Email is intentionally explicit. The SimpleX path never falls back here.
-  saved=$(stellar_backend_json draft-save new "Stellar <stellar@example.org>" "$email" "" "" "$subject" "" "$body_b64") || fail "could not save Stellar draft for email transport"
+  saved=$(mail_backend_json draft-save new "Stellar <stellar@example.org>" "$email" "" "" "$subject" "" "$body_b64") || fail "could not save Stellar draft for email transport"
   ulid=$(printf '%s\n' "$saved" | jq -r '.ulid // ""')
   [ -n "$ulid" ] || fail "Stellar draft-save did not return a draft id"
-  sent=$(stellar_backend_json draft-send "$ulid") || fail "could not send Stellar draft"
+  sent=$(mail_backend_json draft-send "$ulid") || fail "could not send Stellar draft"
   jq -n --arg transport email --arg ulid "$ulid" --argjson draft "$saved" --argjson send "$sent" '{ok:true,transport:$transport,ulid:$ulid,draft:$draft,send:$send}'
 }
 
@@ -1168,16 +1221,15 @@ email_message_parts_from_id() {
 
 email_message_lookup() {
   message_id_value=$1
-  list=$(email_message_parts_from_id "$message_id_value" | sed -n '1p')
-  sender_slug=$(email_message_parts_from_id "$message_id_value" | sed -n '2p')
-  ulid=$(email_message_parts_from_id "$message_id_value" | sed -n '3p')
+  parts=$(email_message_parts_from_id "$message_id_value" || true)
+  list=$(printf '%s\n' "$parts" | sed -n '1p')
+  ulid=$(printf '%s\n' "$parts" | sed -n '3p')
   [ -n "$list" ] && [ -n "$ulid" ] || return 1
-  stellar_messages_for_list "$list" | jq -r --arg id "$message_id_value" --arg fallback_list "$list" '
-    def slug: tostring | ascii_downcase | gsub("[^a-z0-9._@-]+"; "-") | gsub("^-+"; "") | gsub("-+$"; "") | if length == 0 then "unknown" else . end;
-    .messages[]?
-    | select(("email:" + (.list // $fallback_list) + ":" + ((.sender // "") | slug) + ":" + (.ulid // "")) == $id)
-    | [(.list // $fallback_list), (.sender // ""), (.ulid // "")] | @tsv
-  ' | head -n 1
+  sidecar=$(email_sidecar_path "$message_id_value" || true)
+  [ -n "$sidecar" ] || return 1
+  sender=$(yaml_section_scalar_light "$sidecar" headers_cache from)
+  [ -n "$sender" ] || sender=$(basename "$(dirname "$sidecar")")
+  printf '%s\t%s\t%s\n' "$list" "$sender" "$ulid"
 }
 
 simplex_message_lookup() {
@@ -1205,12 +1257,7 @@ message_detail_action() {
       printf '%s\n' "$row" | jq --arg id "$id" '. + {ok:true,id:$id,transport:"simplex"}'
       ;;
     email:*)
-      row=$(email_message_lookup "$id")
-      [ -n "$row" ] || usage_error "email message not found: $id"
-      list=$(printf '%s\n' "$row" | awk -F '\t' '{print $1}')
-      sender=$(printf '%s\n' "$row" | awk -F '\t' '{print $2}')
-      ulid=$(printf '%s\n' "$row" | awk -F '\t' '{print $3}')
-      stellar_backend_json get-message "$list" "$sender" "$ulid" | jq --arg id "$id" '. + {ok:true,id:$id,transport:"email"}'
+      email_message_detail_json "$id"
       ;;
     *)
       usage_error "unsupported message id: $id"
@@ -1311,9 +1358,11 @@ local_mail_sidecar_records() {
   record_count=0
   for sidecar in "$list_dir"/.*.yml "$list_dir"/*.yml "$list_dir"/*/.*.yml "$list_dir"/*/*.yml; do
     [ -f "$sidecar" ] || continue
+    [ ! -L "$sidecar" ] || continue
     parent_dir=$(dirname "$sidecar")
     sender_slug=
     if [ "$parent_dir" != "$list_dir" ]; then
+      [ ! -L "$parent_dir" ] || continue
       sender_slug=$(basename "$parent_dir")
       [ "$sender_slug" != attachments ] || continue
     fi
@@ -1323,6 +1372,7 @@ local_mail_sidecar_records() {
     [ -n "$subject_value" ] || subject_value=$(yaml_scalar_light "$sidecar" subject)
     received_at=$(yaml_scalar_light "$sidecar" received_at)
     [ -n "$received_at" ] || received_at=$(yaml_section_scalar_light "$sidecar" headers_cache date)
+    preview_value=$(email_body_from_sidecar "$sidecar" | head -c 2000 | tr '\r\n\t' '   ' | sed 's/  */ /g; s/^ //; s/ $//' | cut -c 1-220)
     record_count=$((record_count + 1))
     record_file="$records_dir/${list}-$(printf '%04d' "$record_count").json"
     jq -cn \
@@ -1346,6 +1396,7 @@ local_mail_sidecar_records() {
       --arg llm_spam_model "$(yaml_scalar_light "$sidecar" llm_spam_model)" \
       --arg html_path "$(yaml_section_scalar_light "$sidecar" render html)" \
       --arg plain_path "$(yaml_section_scalar_light "$sidecar" render plain)" \
+      --arg preview "$preview_value" \
       '{
         list:$list,
         sender:$sender,
@@ -1365,7 +1416,7 @@ local_mail_sidecar_records() {
         llm_spam_reason:$llm_spam_reason,
         llm_spam_source:$llm_spam_source,
         llm_spam_model:$llm_spam_model,
-        preview:"",
+        preview:$preview,
         eml_path:"",
         html_path:$html_path,
         plain_path:$plain_path
@@ -1404,9 +1455,9 @@ email_sidecar_path() {
       search_dir="$ROOT/$list/$sender_slug"
       ;;
   esac
-  [ -d "$search_dir" ] || return 1
+  [ -d "$search_dir" ] && [ ! -L "$search_dir" ] || return 1
   for sidecar in "$search_dir"/.*.yml "$search_dir"/*.yml; do
-    [ -f "$sidecar" ] || continue
+    [ -f "$sidecar" ] && [ ! -L "$sidecar" ] || continue
     candidate=$(yaml_scalar_light "$sidecar" ulid)
     if [ "$candidate" = "$ulid" ]; then
       printf '%s\n' "$sidecar"
@@ -1416,14 +1467,64 @@ email_sidecar_path() {
   return 1
 }
 
-sidecar_sibling_path() {
+email_body_from_sidecar() {
   sidecar=$1
-  rel=$2
-  [ -n "$rel" ] || return 0
-  case "$rel" in
-    /*) printf '%s\n' "$rel" ;;
-    *) printf '%s/%s\n' "$(dirname "$sidecar")" "$rel" ;;
+  plain_rel=$(yaml_section_scalar_light "$sidecar" render plain)
+  [ -n "$plain_rel" ] || plain_rel=$(yaml_scalar_light "$sidecar" plain)
+  case "$plain_rel" in
+    ''|*/*) plain_rel= ;;
   esac
+  if [ -n "$plain_rel" ]; then
+    plain_path="$(dirname "$sidecar")/$plain_rel"
+    case "$plain_path" in
+      "$ROOT"/*)
+        if [ -f "$plain_path" ] && [ ! -L "$plain_path" ]; then
+          cat "$plain_path"
+          return
+        fi
+        ;;
+    esac
+  fi
+  base=$(basename "$sidecar")
+  eml="${base#.}"
+  eml="${eml%.yml}.eml"
+  eml_path="$(dirname "$sidecar")/$eml"
+  if [ -f "$eml_path" ]; then
+    awk '
+      {
+        line = $0
+        sub(/\r$/, "", line)
+        if (body) {
+          print line
+        } else if (line ~ /^[[:space:]]*$/) {
+          body = 1
+        }
+      }
+    ' "$eml_path"
+  fi
+}
+
+email_message_detail_json() {
+  id=$1
+  sidecar=$(email_sidecar_path "$id" || true)
+  [ -n "$sidecar" ] || usage_error "email message not found: $id"
+  parts=$(email_message_parts_from_id "$id")
+  list=$(printf '%s\n' "$parts" | sed -n '1p')
+  ulid=$(printf '%s\n' "$parts" | sed -n '3p')
+  sender=$(yaml_section_scalar_light "$sidecar" headers_cache from)
+  [ -n "$sender" ] || sender=$(basename "$(dirname "$sidecar")")
+  body=$(email_body_from_sidecar "$sidecar")
+  jq -n \
+    --arg id "$id" \
+    --arg list "$list" \
+    --arg sender "$sender" \
+    --arg ulid "$ulid" \
+    --arg subject "$(yaml_section_scalar_light "$sidecar" headers_cache subject)" \
+    --arg from "$sender" \
+    --arg to "$(yaml_section_scalar_light "$sidecar" headers_cache to)" \
+    --arg received_at "$(yaml_scalar_light "$sidecar" received_at)" \
+    --arg body "$body" \
+    '{ok:true,id:$id,transport:"email",list:$list,sender:$sender,ulid:$ulid,subject:$subject,from:$from,to:$to,received_at:$received_at,body:$body}'
 }
 
 message_trash_files_action() {
@@ -1484,7 +1585,7 @@ archive_message_action() {
       ulid=$(printf '%s\n' "$row" | awk -F '\t' '{print $3}')
       case "$list" in
         accepted|quarantine)
-          stellar_backend_json move-message "$list" archive "$sender" "$ulid"
+          mail_backend_json move-message "$list" archive "$sender" "$ulid"
           ;;
         *)
           jq -n --arg id "$id" --arg list "$list" '{ok:true,id:$id,list:$list,already_archived:true}'
@@ -1512,7 +1613,7 @@ mark_read_action() {
       list=$(printf '%s\n' "$row" | awk -F '\t' '{print $1}')
       sender=$(printf '%s\n' "$row" | awk -F '\t' '{print $2}')
       ulid=$(printf '%s\n' "$row" | awk -F '\t' '{print $3}')
-      stellar_backend_json set-flag "$list" "$sender" "$ulid" read "$value"
+      mail_backend_json set-flag "$list" "$sender" "$ulid" read "$value"
       ;;
     *)
       usage_error "unsupported message id: $id"
@@ -1547,7 +1648,7 @@ delete_message_action() {
       list=$(printf '%s\n' "$row" | awk -F '\t' '{print $1}')
       sender=$(printf '%s\n' "$row" | awk -F '\t' '{print $2}')
       ulid=$(printf '%s\n' "$row" | awk -F '\t' '{print $3}')
-      stellar_backend_json delete-message "$list" "$sender" "$ulid"
+      mail_backend_json delete-message "$list" "$sender" "$ulid"
       ;;
     *)
       usage_error "unsupported message id: $id"
@@ -1566,7 +1667,7 @@ toggle_star_action() {
       list=$(printf '%s\n' "$row" | awk -F '\t' '{print $1}')
       sender=$(printf '%s\n' "$row" | awk -F '\t' '{print $2}')
       ulid=$(printf '%s\n' "$row" | awk -F '\t' '{print $3}')
-      stellar_backend_json set-flag "$list" "$sender" "$ulid" starred "$value"
+      mail_backend_json set-flag "$list" "$sender" "$ulid" starred "$value"
       ;;
     *)
       jq -n --arg id "$id" --argjson value "$value" '{ok:true,id:$id,starred:$value,ignored:true}'
@@ -2219,13 +2320,12 @@ require_cmd jq
 
 case "$action" in
   doctor)
-    if resolve_stellar_backend_script >/dev/null 2>&1; then stellar_backend=ready; else stellar_backend=missing; fi
     jq -n \
       --arg root "$ROOT" \
       --arg repo_root "$repo_dir" \
-      --arg stellar_backend "$stellar_backend" \
+      --argjson mail_backend "$(mail_backend_status_json)" \
       --arg simplex_state "$(simplex_install_state)" \
-      '{ok:true,root:$root,repo_root:$repo_root,stellar_backend:$stellar_backend,simplex_install_state:$simplex_state}'
+      '{ok:true,root:$root,repo_root:$repo_root,mail_backend:$mail_backend,simplex_install_state:$simplex_state}'
     ;;
   prepare)
     ensure_roots
@@ -2254,8 +2354,12 @@ case "$action" in
   snapshot-lines)
     snapshot_lines_action
     ;;
-  health|overview|settings-controls|settings-browse-root|settings-set-test-recipient|settings-verify-domain|settings-set-domain|settings-ssl-prereq-status|settings-ssl-wizard-status|settings-setup-ssl|settings-set-daemon-installed|settings-set-daemon-running|settings-set-daemon-startup|settings-setup-folders|settings-remote-set-target|settings-remote-set-auth|settings-remote-deploy|settings-remote-verify|settings-remote-send-test|settings-remote-sync|settings-llm-controls|settings-llm-set|settings-llm-install-ollama|settings-llm-set-daemon|settings-llm-install-model|settings-llm-uninstall-model|spam-classify|event-feed|contact-get|contact-save|list-senders|list-archive-bundle|list-inbox-bundle-fast|list-messages-fast|list-messages|set-flag|move-message|move-sender|draft-list|draft-get|draft-save|draft-delete|draft-send)
-    stellar_backend_json "$action" "$@"
+  settings-setup-folders)
+    ensure_roots
+    jq -n --arg root "$ROOT" '{ok:true,root:$root,folders_ready:true}'
+    ;;
+  health|overview|settings-controls|settings-browse-root|settings-set-test-recipient|settings-verify-domain|settings-set-domain|settings-ssl-prereq-status|settings-ssl-wizard-status|settings-setup-ssl|settings-set-daemon-installed|settings-set-daemon-running|settings-set-daemon-startup|settings-remote-set-target|settings-remote-set-auth|settings-remote-deploy|settings-remote-verify|settings-remote-send-test|settings-remote-sync|settings-llm-controls|settings-llm-set|settings-llm-install-ollama|settings-llm-set-daemon|settings-llm-install-model|settings-llm-uninstall-model|spam-classify|event-feed|contact-get|contact-save|list-senders|list-archive-bundle|list-inbox-bundle-fast|list-messages-fast|list-messages|set-flag|move-message|move-sender|draft-list|draft-get|draft-save|draft-delete|draft-send)
+    mail_backend_json "$action" "$@"
     ;;
   bind-contact)
     ensure_roots
@@ -2354,14 +2458,14 @@ Attachment: ${attachment_path##*/}"
     ;;
   delete-message)
     if [ "$#" -ge 3 ]; then
-      stellar_backend_json delete-message "$@"
+      mail_backend_json delete-message "$@"
     else
       delete_message_action "${1-}"
     fi
     ;;
   get-message)
     if [ "$#" -ge 3 ]; then
-      stellar_backend_json get-message "$@"
+      mail_backend_json get-message "$@"
     else
       message_detail_action "${1-}"
     fi
