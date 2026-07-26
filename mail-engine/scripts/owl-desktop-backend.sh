@@ -870,9 +870,8 @@ install_bundled_binaries_on_remote() {
   ssh_port=${4-}
   binary_dir=$5
   archive=$(mktemp "${TMPDIR:-/tmp}/stellar-mail-engine-bin.XXXXXX.tar.gz")
-  COPYFILE_DISABLE=1 tar -czf "$archive" \
-    -C "$binary_dir" owl owl-daemon \
-    -C "$REPO_ROOT" scripts/owl-daemon-service scripts/owld
+  COPYFILE_DISABLE=1 tar --no-xattrs -czf "$archive" \
+    -C "$binary_dir" owl owl-daemon
 
   batch_mode=yes
   if [ -n "$ssh_key_password" ]; then
@@ -907,8 +906,7 @@ if [ -x "$HOME/.local/bin/owl-daemon" ]; then
 fi
 mv "$HOME/.local/bin/.owl.staged" "$HOME/.local/bin/owl"
 mv "$HOME/.local/bin/.owl-daemon.staged" "$HOME/.local/bin/owl-daemon"
-install -m 0755 "$tmp_dir/scripts/owl-daemon-service" "$HOME/.local/bin/owl-daemon-service"
-install -m 0755 "$tmp_dir/scripts/owld" "$HOME/.local/bin/owld"
+rm -f "$HOME/.local/bin/owl-daemon-service" "$HOME/.local/bin/owld"
 printf '%s\n' "remote_binary_install=ok"
 REMOTE_BINARY_INSTALL
 }
@@ -919,10 +917,9 @@ build_bundled_source_on_remote() {
   ssh_key_password=${3-}
   ssh_port=${4-}
   archive=$(mktemp "${TMPDIR:-/tmp}/stellar-mail-engine-source.XXXXXX.tar.gz")
-  COPYFILE_DISABLE=1 tar -czf "$archive" \
+  COPYFILE_DISABLE=1 tar --no-xattrs -czf "$archive" \
     -C "$REPO_ROOT" \
-    Cargo.toml Cargo.lock src \
-    scripts/owl-daemon-service scripts/owld
+    Cargo.toml Cargo.lock src
 
   batch_mode=yes
   if [ -n "$ssh_key_password" ]; then
@@ -966,8 +963,7 @@ CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR="$target_dir" cargo build \
   --bins
 install -m 0755 "$target_dir/server/owl" "$HOME/.local/bin/owl"
 install -m 0755 "$target_dir/server/owl-daemon" "$HOME/.local/bin/owl-daemon"
-install -m 0755 "$source_dir/scripts/owl-daemon-service" "$HOME/.local/bin/owl-daemon-service"
-install -m 0755 "$source_dir/scripts/owld" "$HOME/.local/bin/owld"
+rm -f "$HOME/.local/bin/owl-daemon-service" "$HOME/.local/bin/owld"
 printf '%s\n' "remote_source_build=ok"
 REMOTE_SOURCE_BUILD
 }
@@ -1202,7 +1198,7 @@ ensure_postfix_inbound_bridge() {
   if [ -z "$mail_hostname" ] || [ "$mail_hostname" = "127.0.0.1" ] || [ "$mail_hostname" = "localhost" ] || remote_looks_like_ip "$mail_hostname"; then
     mail_hostname="mail.$domain_host"
   fi
-  cert_dir="$remote_root/config/letsencrypt/live/$domain_host"
+  cert_dir="$remote_root/config/letsencrypt/live/$mail_hostname"
   cert_fullchain="$cert_dir/fullchain.pem"
   cert_privkey="$cert_dir/privkey.pem"
   mkdir -p "$HOME/.local/bin" "$remote_root/logs" "$remote_root/.tmp-postfix"
@@ -1355,32 +1351,52 @@ POSTFIX_MASTER
 }
 
 ensure_owl_binaries() {
-  if PATH="$path_prefix" command -v owl >/dev/null 2>&1 && (PATH="$path_prefix" command -v owl-daemon >/dev/null 2>&1 || PATH="$path_prefix" command -v owld >/dev/null 2>&1); then
+  if PATH="$path_prefix" command -v owl >/dev/null 2>&1 && PATH="$path_prefix" command -v owl-daemon >/dev/null 2>&1; then
     return 0
   fi
   printf '%s\n' "remote deploy: Stellar's bundled mail binaries were not installed successfully" >&2
   return 1
 }
 
-ensure_owl_service_tools() {
-  if ! PATH="$path_prefix" command -v owl-daemon-service >/dev/null 2>&1; then
-    append_service_note 'bundled owl-daemon-service helper is unavailable'
-  fi
-  if ! PATH="$path_prefix" command -v owld >/dev/null 2>&1; then
-    append_service_note 'bundled owld wrapper is unavailable'
-  fi
+ensure_system_daemon_service() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  daemon_bin="$HOME/.local/bin/owl-daemon"
+  [ -x "$daemon_bin" ] || return 1
+  service_user=$(id -un)
+  remote_run_as_root sh -s -- "$service_user" "$daemon_bin" "$env_path" <<'STELLAR_MAIL_SERVICE' || return 1
+set -eu
+service_user=$1
+daemon_bin=$2
+env_path=$3
+cat >/etc/systemd/system/stellar-mail.service <<EOF
+[Unit]
+Description=Stellar mail daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$service_user
+ExecStart=$daemon_bin --env $env_path
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable stellar-mail.service
+pkill -f "(^|/)owl-daemon --env $env_path\$" 2>/dev/null || true
+systemctl restart stellar-mail.service
+systemctl is-active --quiet stellar-mail.service
+STELLAR_MAIL_SERVICE
 }
 
-select_daemon_command() {
-  if PATH="$path_prefix" command -v owl-daemon >/dev/null 2>&1; then
-    printf '%s\n' "owl-daemon"
-    return 0
-  fi
-  if PATH="$path_prefix" command -v owld >/dev/null 2>&1; then
-    printf '%s\n' "owld"
-    return 0
-  fi
-  printf '%s' ''
+remove_cron_keepalive() {
+  command -v crontab >/dev/null 2>&1 || return 0
+  cron_current=$(crontab -l 2>/dev/null || true)
+  printf '%s\n' "$cron_current" | grep -Fv "$HOME/.local/bin/owl-remote-keepalive" | crontab -
+  rm -f "$HOME/.local/bin/owl-remote-keepalive"
 }
 
 daemon_running_now() {
@@ -1489,7 +1505,6 @@ fi
 
 service_note=''
 ensure_owl_binaries
-ensure_owl_service_tools
 if ! ensure_postfix_runtime; then
   if [ -n "$service_note" ]; then
     printf 'note=%s\n' "$service_note"
@@ -1515,53 +1530,24 @@ fi
 PATH="$path_prefix" owl --env "$env_path" install >/dev/null 2>&1
 PATH="$path_prefix" owl --env "$env_path" update >/dev/null 2>&1 || :
 
-service_status=''
-if PATH="$path_prefix" command -v owl-daemon-service >/dev/null 2>&1; then
-  if PATH="$path_prefix" owl-daemon-service install >/dev/null 2>&1; then
-    if ! PATH="$path_prefix" owl-daemon-service enable-startup >/dev/null 2>&1; then
-      append_service_note 'startup enable failed'
-    fi
-    if ! PATH="$path_prefix" owl-daemon-service start >/dev/null 2>&1; then
-      append_service_note 'service start failed'
-    fi
-  else
-    append_service_note 'service install failed'
-  fi
-  service_status=$(PATH="$path_prefix" owl-daemon-service status 2>/dev/null || true)
-else
-  append_service_note 'service helper unavailable'
-fi
 startup_mode='none'
-service_running=false
-service_startup=false
-case "$service_status" in
-  *"running=running"*)
-    service_running=true
-    ;;
-esac
-case "$service_status" in
-  *"startup=enabled"*)
-    service_startup=true
-    ;;
-esac
-
-if [ "$service_running" = true ] && [ "$service_startup" = true ]; then
+service_status=''
+if ensure_system_daemon_service; then
+  remove_cron_keepalive
   startup_mode='service'
+  service_status='stellar-mail.service active'
 else
-  daemon_cmd=$(select_daemon_command)
-  if [ -z "$daemon_cmd" ]; then
-    append_service_note 'daemon binary unavailable for fallback'
-  else
-    if ensure_cron_keepalive "$daemon_cmd"; then
-      if daemon_running_now "$daemon_cmd"; then
-        startup_mode='cron'
-        append_service_note 'cron keepalive enabled'
-      else
-        append_service_note 'cron keepalive configured but daemon is not running'
-      fi
+  append_service_note 'system service unavailable'
+  daemon_cmd=owl-daemon
+  if ensure_cron_keepalive "$daemon_cmd"; then
+    if daemon_running_now "$daemon_cmd"; then
+      startup_mode='cron'
+      append_service_note 'cron keepalive enabled'
     else
-      append_service_note 'cron keepalive setup failed'
+      append_service_note 'cron keepalive configured but daemon is not running'
     fi
+  else
+    append_service_note 'cron keepalive setup failed'
   fi
 fi
 
@@ -1608,6 +1594,7 @@ set -eu
 
 routes_b64=$1
 routes_file="$HOME/mail/.stellar/postfix-virtual-aliases"
+PATH="$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 mkdir -p "$(dirname "$routes_file")"
 if ! printf '%s' "$routes_b64" | base64 --decode >"$routes_file" 2>/dev/null; then
   printf '%s' "$routes_b64" | base64 -d >"$routes_file" 2>/dev/null
@@ -2028,6 +2015,20 @@ if [ -n "$certbot_output" ]; then
   printf '%s\n' "$certbot_output"
 fi
 
+if [ "$ssl_ready" = "true" ] && command -v postconf >/dev/null 2>&1; then
+  ssl_key_path="$(dirname "$ssl_cert_path")/privkey.pem"
+  remote_run_as_root postconf -e "smtpd_tls_cert_file=$ssl_cert_path"
+  remote_run_as_root postconf -e "smtpd_tls_key_file=$ssl_key_path"
+  remote_run_as_root postconf -e 'smtpd_tls_security_level=may'
+  if command -v systemctl >/dev/null 2>&1; then
+    remote_run_as_root systemctl reload postfix
+  elif command -v service >/dev/null 2>&1; then
+    remote_run_as_root service postfix reload
+  else
+    remote_run_as_root postfix reload
+  fi
+fi
+
 printf 'owl_ssl_ready=%s\n' "$ssl_ready"
 printf 'owl_ssl_expires_at=%s\n' "$ssl_expires_at"
 printf 'owl_ssl_days_remaining=%s\n' "$ssl_days_remaining"
@@ -2154,8 +2155,11 @@ fi
 postfix_bridge_ok=false
 if command -v postconf >/dev/null 2>&1; then
   transport_maps=$(postconf -h transport_maps 2>/dev/null || printf '')
-  mailbox_transport=$(postconf -h mailbox_transport 2>/dev/null || printf '')
-  if printf '%s' "$transport_maps" | grep -Fq 'transport_owl.regexp' && printf '%s' "$mailbox_transport" | grep -Eq '^owlinbound:'; then
+  virtual_alias_domains=$(postconf -h virtual_alias_domains 2>/dev/null || printf '')
+  virtual_alias_maps=$(postconf -h virtual_alias_maps 2>/dev/null || printf '')
+  if printf '%s' "$transport_maps" | grep -Fq 'transport_owl.regexp' &&
+    [ -n "$virtual_alias_domains" ] &&
+    printf '%s' "$virtual_alias_maps" | grep -Fq 'stellar_virtual_aliases'; then
     postfix_bridge_ok=true
   fi
 fi

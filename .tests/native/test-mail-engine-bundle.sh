@@ -33,21 +33,27 @@ grep -Fq -- '--target x86_64-unknown-linux-musl' "$repo_dir/.github/workflows/na
 
 grep -Fq 'virtual_alias_domains=$domain_host' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 grep -Fq 'virtual_alias_maps=hash:/etc/postfix/stellar_virtual_aliases' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
+grep -Fq 'cert_dir="$remote_root/config/letsencrypt/live/$mail_hostname"' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 grep -Fq "postconf -e 'mailbox_transport='" "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
+test "$(grep -Fc 'postconf -e "smtpd_tls_cert_file=' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh")" -ge 2
 grep -Fq '/^stellar-inbox@localhost\$/ owlinbound:' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 ! grep -Fq '/^.+@${regex_domain}\$/ owlinbound:' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 ! grep -Fq 'andersaamodt/owl' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 grep -Fq "SSH_KEYCHAIN_OPTIONS='-o AddKeysToAgent=yes -o UseKeychain=yes'" "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
+grep -Fq 'tar --no-xattrs -czf' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 grep -Fq 'CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR="$target_dir" cargo build' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 grep -Fq -- '--profile server' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 
-awk '
-  /<<'\''REMOTE_DEPLOY'\''/ { capture = 1; next }
-  /^REMOTE_DEPLOY$/ { capture = 0 }
-  capture { print }
-' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh" >"$tmpdir/remote-deploy.sh"
-test -s "$tmpdir/remote-deploy.sh"
-sh -n "$tmpdir/remote-deploy.sh"
+for marker in REMOTE_BINARY_INSTALL REMOTE_SOURCE_BUILD REMOTE_DEPLOY REMOTE_ADDRESS_PUBLISH REMOTE_SSL_SETUP; do
+  extracted="$tmpdir/$marker.sh"
+  awk -v marker="$marker" '
+    index($0, "<<" marker) || index($0, "<<'\''" marker "'\''") { capture = 1; next }
+    $0 == marker { capture = 0 }
+    capture { print }
+  ' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh" >"$extracted"
+  test -s "$extracted"
+  sh -n "$extracted"
+done
 
 test ! -e "$repo_dir/mail-engine/target"
 printf '%s\n' "bundled mail engine tests passed"

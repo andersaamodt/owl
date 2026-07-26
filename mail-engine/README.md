@@ -10,6 +10,11 @@ This directory is the server component shipped with Stellar. It contains:
 format and upgrade path. It is not a separately discovered dependency: Stellar
 builds and packages it from this directory.
 
+Desktop releases include a static x86-64 Linux server build, so a normal VPS
+does not need a Rust toolchain or matching system libc. The installer builds
+this bundled source on the server only for architectures without a packaged
+binary.
+
 Build and test without creating repository-local state:
 
 ```sh

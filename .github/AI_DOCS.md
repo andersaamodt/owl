@@ -68,6 +68,7 @@
 
 ### Settled Mail Architecture
 - Stellar ships its own installable mail server.
+- Desktop releases carry a static x86-64 Linux server engine; bundled source is the fallback for other architectures.
 - Stellar is single-user: enabled addresses and aliases route into one unified inbox.
 - Each address may forward a copy to zero or more external destinations.
 - `postmaster` is always accepted; catch-all is disabled by default.
