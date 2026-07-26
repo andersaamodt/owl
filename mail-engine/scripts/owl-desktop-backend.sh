@@ -42,7 +42,7 @@ Actions:
   settings-remote-deploy ROOT [HOST] [SSH_KEY_PATH] [SSH_KEY_PASSWORD] [SSH_PORT]
   address-publish ROOT [HOST] [SSH_KEY_PATH] [SSH_KEY_PASSWORD] [SSH_PORT]
   settings-remote-verify ROOT [HOST] [SSH_KEY_PATH] [SSH_KEY_PASSWORD] [SSH_PORT]
-  settings-remote-send-test ROOT [HOST] [SSH_KEY_PATH] [SSH_KEY_PASSWORD] [SSH_PORT]
+  settings-remote-send-test ROOT [HOST] [SSH_KEY_PATH] [SSH_KEY_PASSWORD] [SSH_PORT] EXTERNAL_RECIPIENT
   settings-remote-sync ROOT [HOST] [SSH_KEY_PATH] [SSH_KEY_PASSWORD] [SSH_PORT]
   settings-llm-controls ROOT
   settings-llm-set ROOT ENABLED AUTO_INSTALL MODEL
@@ -375,6 +375,12 @@ default_remote_state_json() {
     port: "",
     ssh_key_has_password: "0",
     ssh_key_save_choice: "0",
+    outbound_test_recipient: "",
+    outbound_dns: {
+      dkim: {host: "", value: ""},
+      spf: {host: "", value: ""},
+      dmarc: {host: "", value: ""}
+    },
     last_deploy_at: "",
     last_deploy_status: "idle",
     last_deploy_message: "",
@@ -402,6 +408,21 @@ load_remote_state_json() {
       port: (.port // ""),
       ssh_key_has_password: (.ssh_key_has_password // "0"),
       ssh_key_save_choice: (.ssh_key_save_choice // "0"),
+      outbound_test_recipient: (.outbound_test_recipient // ""),
+      outbound_dns: {
+        dkim: {
+          host: (.outbound_dns.dkim.host // ""),
+          value: (.outbound_dns.dkim.value // "")
+        },
+        spf: {
+          host: (.outbound_dns.spf.host // ""),
+          value: (.outbound_dns.spf.value // "")
+        },
+        dmarc: {
+          host: (.outbound_dns.dmarc.host // ""),
+          value: (.outbound_dns.dmarc.value // "")
+        }
+      },
       last_deploy_at: (.last_deploy_at // ""),
       last_deploy_status: (.last_deploy_status // "idle"),
       last_deploy_message: (.last_deploy_message // ""),
@@ -756,7 +777,7 @@ compact_status_message() {
   printf '%s' "${1-}" \
     | tr '\r\n' '  ' \
     | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' \
-    | awk '{ if (length($0) > 420) print substr($0, length($0) - 419); else print }'
+    | awk '{ if (length($0) > 420) print substr($0, 1, 417) "..."; else print }'
 }
 
 current_utc_timestamp() {
@@ -1130,6 +1151,35 @@ install_postfix_package() {
   return 1
 }
 
+install_outbound_packages() {
+  if command -v saslpasswd2 >/dev/null 2>&1 &&
+    command -v opendkim-genkey >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v apt-get >/dev/null 2>&1; then
+    remote_run_as_root env DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null 2>&1 || return 1
+    remote_run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+      -o Dpkg::Options::=--force-confdef \
+      -o Dpkg::Options::=--force-confold \
+      sasl2-bin libsasl2-modules opendkim opendkim-tools >/dev/null 2>&1 || return 1
+    return 0
+  fi
+  if command -v dnf >/dev/null 2>&1; then
+    remote_run_as_root dnf install -y cyrus-sasl cyrus-sasl-plain opendkim >/dev/null 2>&1 || return 1
+    return 0
+  fi
+  if command -v yum >/dev/null 2>&1; then
+    remote_run_as_root yum install -y cyrus-sasl cyrus-sasl-plain opendkim >/dev/null 2>&1 || return 1
+    return 0
+  fi
+  if command -v pacman >/dev/null 2>&1; then
+    remote_run_as_root pacman -Sy --noconfirm cyrus-sasl opendkim >/dev/null 2>&1 || return 1
+    return 0
+  fi
+  return 1
+}
+
 ensure_postfix_runtime() {
   if ! command -v postconf >/dev/null 2>&1 && ! command -v postfix >/dev/null 2>&1; then
     if install_postfix_package; then
@@ -1170,11 +1220,229 @@ ensure_remote_smtp_firewall() {
       return 0
       ;;
   esac
-  if printf '%s\n' "$ufw_status" | grep -Eq '(^|[[:space:]])25/tcp([[:space:]]|$)'; then
-    return 0
+  for smtp_port in 25 587; do
+    if printf '%s\n' "$ufw_status" | grep -Eq "(^|[[:space:]])$smtp_port/tcp([[:space:]]|$)"; then
+      continue
+    fi
+    remote_run_as_root ufw allow "$smtp_port/tcp" >/dev/null 2>&1 || return 1
+    append_service_note "ufw allow $smtp_port/tcp applied"
+  done
+  return 0
+}
+
+ensure_postfix_outbound_submission() {
+  domain_host=$1
+  mail_hostname=$2
+  selector=mail
+  regex_domain=$(regex_escape_basic "$domain_host")
+  credentials_file="$remote_root/.stellar/submission-credentials"
+  dns_file="$remote_root/.stellar/outbound-dns"
+  opendkim_key_dir="/etc/opendkim/keys/$domain_host"
+  public_ipv4=''
+
+  first_public_ipv4() {
+    awk '
+      /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ &&
+      $0 !~ /^127\./ &&
+      $0 !~ /^10\./ &&
+      $0 !~ /^192\.168\./ &&
+      $0 !~ /^172\.(1[6-9]|2[0-9]|3[01])\./ {
+        print
+        exit
+      }
+    '
+  }
+
+  if command -v getent >/dev/null 2>&1; then
+    public_ipv4=$(getent ahostsv4 "$mail_hostname" 2>/dev/null |
+      awk '{print $1}' |
+      first_public_ipv4)
   fi
-  remote_run_as_root ufw allow 25/tcp >/dev/null 2>&1 || return 1
-  append_service_note 'ufw allow 25/tcp applied'
+  if [ -z "$public_ipv4" ] && command -v dig >/dev/null 2>&1; then
+    public_ipv4=$(dig +short A "$mail_hostname" 2>/dev/null | first_public_ipv4)
+  fi
+  if [ -z "$public_ipv4" ] && command -v ip >/dev/null 2>&1; then
+    public_ipv4=$(ip -4 route get 1.1.1.1 2>/dev/null |
+      awk '{
+        for (i = 1; i <= NF; i++) {
+          if ($i == "src" && (i + 1) <= NF) {
+            print $(i + 1)
+            exit
+          }
+        }
+      }' |
+      first_public_ipv4)
+  fi
+  if [ -z "$public_ipv4" ]; then
+    public_ipv4=$(hostname -I 2>/dev/null | tr ' ' '\n' | first_public_ipv4)
+  fi
+  [ -n "$public_ipv4" ] || return 1
+
+  if ! install_outbound_packages; then
+    append_service_note 'outbound packages missing and auto-install failed'
+    return 1
+  fi
+  if ! command -v saslpasswd2 >/dev/null 2>&1 ||
+    ! command -v opendkim-genkey >/dev/null 2>&1; then
+    append_service_note 'outbound package commands unavailable'
+    return 1
+  fi
+
+  mkdir -p "$remote_root/.stellar"
+  chmod 0700 "$remote_root/.stellar"
+  submission_username="stellar@$domain_host"
+  submission_password=''
+  if [ -r "$credentials_file" ]; then
+    stored_username=$(awk -F= '$1 == "username" {sub(/^[^=]*=/, ""); print; exit}' "$credentials_file")
+    stored_password=$(awk -F= '$1 == "password" {sub(/^[^=]*=/, ""); print; exit}' "$credentials_file")
+    if [ "$stored_username" = "$submission_username" ] && [ -n "$stored_password" ]; then
+      submission_password=$stored_password
+    fi
+  fi
+  if [ -z "$submission_password" ]; then
+    submission_password=$(openssl rand -base64 36 | tr -d '\r\n')
+    umask 077
+    {
+      printf 'username=%s\n' "$submission_username"
+      printf 'password=%s\n' "$submission_password"
+    } >"$credentials_file"
+    chmod 0600 "$credentials_file"
+  fi
+  umask 022
+
+  remote_run_as_root mkdir -p /etc/postfix/sasl || return 1
+  remote_run_as_root sh -c "cat > /etc/postfix/sasl/smtpd.conf <<'SASL_CONFIG'
+pwcheck_method: auxprop
+auxprop_plugin: sasldb
+mech_list: PLAIN LOGIN
+sasldb_path: /etc/sasldb2
+SASL_CONFIG
+" || return 1
+  remote_run_as_root sh -c "printf '%s\n' '/^.+@$regex_domain\$/ stellar@$domain_host' >/etc/postfix/stellar_sender_logins" || return 1
+  remote_run_as_root chmod 0644 /etc/postfix/stellar_sender_logins || return 1
+  if ! printf '%s' "$submission_password" |
+    remote_run_as_root saslpasswd2 -p -c -u "$domain_host" stellar; then
+    return 1
+  fi
+  remote_run_as_root chown root:postfix /etc/sasldb2 || return 1
+  remote_run_as_root chmod 0640 /etc/sasldb2 || return 1
+
+  remote_run_as_root mkdir -p "$opendkim_key_dir" || return 1
+  remote_run_as_root chmod 0755 /etc/opendkim /etc/opendkim/keys || return 1
+  if ! remote_run_as_root test -s "$opendkim_key_dir/$selector.private"; then
+    remote_run_as_root opendkim-genkey \
+      -b 2048 \
+      -d "$domain_host" \
+      -D "$opendkim_key_dir" \
+      -s "$selector" || return 1
+  fi
+  remote_run_as_root chown -R opendkim:opendkim "$opendkim_key_dir" || return 1
+  remote_run_as_root chmod 0700 "$opendkim_key_dir" || return 1
+  remote_run_as_root chmod 0600 "$opendkim_key_dir/$selector.private" || return 1
+
+  remote_run_as_root sh -s -- "$domain_host" "$selector" <<'OPENDKIM_CONFIG' || return 1
+set -eu
+domain=$1
+selector=$2
+cat >/etc/opendkim.conf <<'EOF'
+Syslog                  yes
+UMask                   007
+Mode                    sv
+Canonicalization        relaxed/simple
+OversignHeaders         From
+UserID                  opendkim
+Socket                  inet:8891@localhost
+PidFile                 /run/opendkim/opendkim.pid
+KeyTable                file:/etc/opendkim/key.table
+SigningTable            refile:/etc/opendkim/signing.table
+ExternalIgnoreList      refile:/etc/opendkim/trusted.hosts
+InternalHosts           refile:/etc/opendkim/trusted.hosts
+MacroList               daemon_name|ORIGINATING
+EOF
+printf '%s._domainkey.%s %s:%s:/etc/opendkim/keys/%s/%s.private\n' \
+  "$selector" "$domain" "$domain" "$selector" "$domain" "$selector" >/etc/opendkim/key.table
+printf '*@%s %s._domainkey.%s\n' "$domain" "$selector" "$domain" >/etc/opendkim/signing.table
+cat >/etc/opendkim/trusted.hosts <<EOF
+127.0.0.1
+::1
+localhost
+EOF
+chmod 0644 /etc/opendkim.conf /etc/opendkim/key.table /etc/opendkim/signing.table /etc/opendkim/trusted.hosts
+OPENDKIM_CONFIG
+
+  remote_run_as_root sh -s -- "$domain_host" <<'POSTFIX_SUBMISSION' || return 1
+set -eu
+domain=$1
+master_file=/etc/postfix/master.cf
+tmp=$(mktemp)
+awk '
+  BEGIN { skip = 0 }
+  /^[[:space:]]*submission[[:space:]]+inet[[:space:]]/ {
+    skip = 1
+    next
+  }
+  skip == 1 {
+    if ($0 ~ /^[[:space:]]+-o[[:space:]]/) {
+      next
+    }
+    skip = 0
+  }
+  { print }
+' "$master_file" >"$tmp"
+cat >>"$tmp" <<EOF
+
+submission inet n - n - - smtpd
+  -o syslog_name=postfix/submission
+  -o smtpd_tls_security_level=encrypt
+  -o smtpd_sasl_auth_enable=yes
+  -o smtpd_sasl_type=cyrus
+  -o smtpd_sasl_path=smtpd
+  -o smtpd_sasl_local_domain=$domain
+  -o smtpd_sasl_security_options=noanonymous
+  -o smtpd_sasl_tls_security_options=noanonymous
+  -o smtpd_sender_login_maps=regexp:/etc/postfix/stellar_sender_logins
+  -o smtpd_sender_restrictions=reject_sender_login_mismatch
+  -o smtpd_relay_restrictions=permit_sasl_authenticated,reject
+  -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject
+  -o milter_macro_daemon_name=ORIGINATING
+EOF
+mv "$tmp" "$master_file"
+chmod 0644 "$master_file"
+POSTFIX_SUBMISSION
+
+  remote_run_as_root postconf -e 'smtpd_milters=inet:127.0.0.1:8891' || return 1
+  remote_run_as_root postconf -e 'non_smtpd_milters=inet:127.0.0.1:8891' || return 1
+  remote_run_as_root postconf -e 'milter_default_action=accept' || return 1
+  remote_run_as_root postconf -e 'milter_protocol=6' || return 1
+  remote_run_as_root postconf -e 'disable_vrfy_command=yes' || return 1
+  remote_run_as_root postconf -e 'smtp_address_preference=ipv4' || return 1
+
+  if command -v systemctl >/dev/null 2>&1; then
+    remote_run_as_root systemctl enable --now opendkim >/dev/null 2>&1 || return 1
+    remote_run_as_root systemctl restart opendkim >/dev/null 2>&1 || return 1
+  elif command -v service >/dev/null 2>&1; then
+    remote_run_as_root service opendkim restart >/dev/null 2>&1 || return 1
+  fi
+
+  dkim_value=$(remote_run_as_root awk -F'"' '
+    {
+      for (i = 2; i <= NF; i += 2) {
+        printf "%s", $i
+      }
+    }
+    END { print "" }
+  ' "$opendkim_key_dir/$selector.txt")
+  [ -n "$dkim_value" ] || return 1
+  {
+    printf 'dkim_host=%s._domainkey.%s\n' "$selector" "$domain_host"
+    printf 'dkim_value=%s\n' "$dkim_value"
+    printf 'spf_host=%s\n' "$domain_host"
+    printf 'spf_value=v=spf1 ip4:%s -all\n' "$public_ipv4"
+    printf 'dmarc_host=_dmarc.%s\n' "$domain_host"
+    printf 'dmarc_value=v=DMARC1; p=quarantine; rua=mailto:postmaster@%s; adkim=s; aspf=s\n' "$domain_host"
+  } >"$dns_file"
+  chmod 0600 "$dns_file"
+  append_service_note "authenticated outbound submission configured on port 587 for $domain_host"
   return 0
 }
 
@@ -1314,6 +1582,7 @@ POSTFIX_MASTER
     remote_run_as_root postconf -e 'smtpd_tls_security_level=may' || return 1
     append_service_note "postfix TLS configured from $cert_dir"
   fi
+  ensure_postfix_outbound_submission "$domain_host" "$mail_hostname" || return 1
   routes_file="$remote_root/.stellar/postfix-virtual-aliases"
   mkdir -p "$(dirname "$routes_file")"
   if [ -z "$remote_address_routes_b64" ]; then
@@ -1474,8 +1743,6 @@ ensure_remote_mail_dirs
 
 if [ ! -f "$env_path" ]; then
   cat >"$env_path" <<ENV_SAMPLE
-dmarc_policy=none
-dkim_selector=mail
 letsencrypt_method=http
 keep_plus_tags=false
 
@@ -1505,6 +1772,14 @@ fi
 
 service_note=''
 ensure_owl_binaries
+if [ ! -f "$remote_root/accepted/.rules" ] ||
+  [ ! -f "$remote_root/spam/.rules" ] ||
+  [ ! -f "$remote_root/banned/.rules" ]; then
+  PATH="$path_prefix" owl --env "$env_path" install >/dev/null 2>&1 || {
+    printf '%s\n' "remote deploy: unable to initialize Stellar mail folders" >&2
+    exit 1
+  }
+fi
 if ! ensure_postfix_runtime; then
   if [ -n "$service_note" ]; then
     printf 'note=%s\n' "$service_note"
@@ -1526,9 +1801,6 @@ if ! ensure_postfix_inbound_bridge; then
   printf '%s\n' "remote deploy: unable to configure postfix inbound bridge to Owl folders" >&2
   exit 1
 fi
-
-PATH="$path_prefix" owl --env "$env_path" install >/dev/null 2>&1
-PATH="$path_prefix" owl --env "$env_path" update >/dev/null 2>&1 || :
 
 startup_mode='none'
 service_status=''
@@ -1575,6 +1847,48 @@ if [ -n "$service_note" ]; then
 fi
 printf 'deploy=ok\n'
 REMOTE_DEPLOY
+}
+
+remote_submission_credentials_over_ssh() {
+  target_host=$1
+  key_path=$2
+  ssh_key_password=${3-}
+  ssh_port=${4-}
+
+  ssh_exec "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" sh -s <<'REMOTE_SUBMISSION_CREDENTIALS'
+set -eu
+credentials_file="$HOME/mail/.stellar/submission-credentials"
+[ -r "$credentials_file" ] || {
+  printf '%s\n' "submission credentials are missing" >&2
+  exit 1
+}
+chmod 0600 "$credentials_file"
+username=$(awk -F= '$1 == "username" {sub(/^[^=]*=/, ""); print; exit}' "$credentials_file")
+password=$(awk -F= '$1 == "password" {sub(/^[^=]*=/, ""); print; exit}' "$credentials_file")
+[ -n "$username" ] && [ -n "$password" ] || {
+  printf '%s\n' "submission credentials are incomplete" >&2
+  exit 1
+}
+printf 'username=%s\n' "$username"
+printf 'password=%s\n' "$password"
+REMOTE_SUBMISSION_CREDENTIALS
+}
+
+remote_outbound_dns_over_ssh() {
+  target_host=$1
+  key_path=$2
+  ssh_key_password=${3-}
+  ssh_port=${4-}
+
+  ssh_exec "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" sh -s <<'REMOTE_OUTBOUND_DNS'
+set -eu
+dns_file="$HOME/mail/.stellar/outbound-dns"
+[ -r "$dns_file" ] || {
+  printf '%s\n' "outbound DNS records are missing" >&2
+  exit 1
+}
+cat "$dns_file"
+REMOTE_OUTBOUND_DNS
 }
 
 publish_address_routes_over_ssh() {
@@ -2262,13 +2576,20 @@ else
 fi
 
 smtp_listening=false
+submission_listening=false
 if command -v ss >/dev/null 2>&1; then
   if ss -ltn 2>/dev/null | grep -Eq ':[[]?25[[:space:]]'; then
     smtp_listening=true
   fi
+  if ss -ltn 2>/dev/null | grep -Eq ':[[]?587[[:space:]]'; then
+    submission_listening=true
+  fi
 elif command -v netstat >/dev/null 2>&1; then
   if netstat -ltn 2>/dev/null | grep -Eq '[:.]25[[:space:]]'; then
     smtp_listening=true
+  fi
+  if netstat -ltn 2>/dev/null | grep -Eq '[:.]587[[:space:]]'; then
+    submission_listening=true
   fi
 fi
 
@@ -2288,6 +2609,42 @@ elif command -v service >/dev/null 2>&1; then
   fi
 fi
 
+outbound_submission_ok=false
+opendkim_running=false
+if command -v postconf >/dev/null 2>&1 &&
+  grep -Eq '^submission[[:space:]]+inet' /etc/postfix/master.cf 2>/dev/null &&
+  [ -s /etc/sasldb2 ] &&
+  [ -s /etc/postfix/stellar_sender_logins ] &&
+  [ -s /etc/opendkim/key.table ] &&
+  [ -s /etc/opendkim/signing.table ]; then
+  outbound_submission_ok=true
+fi
+if command -v systemctl >/dev/null 2>&1; then
+  if systemctl is-active opendkim >/dev/null 2>&1; then
+    opendkim_running=true
+  fi
+elif command -v service >/dev/null 2>&1; then
+  if service opendkim status >/dev/null 2>&1; then
+    opendkim_running=true
+  fi
+fi
+
+outbound_dns_file="$remote_root/.stellar/outbound-dns"
+outbound_dkim_host=''
+outbound_dkim_value=''
+outbound_spf_host=''
+outbound_spf_value=''
+outbound_dmarc_host=''
+outbound_dmarc_value=''
+if [ -r "$outbound_dns_file" ]; then
+  outbound_dkim_host=$(awk -F= '$1 == "dkim_host" {sub(/^[^=]*=/, ""); print; exit}' "$outbound_dns_file")
+  outbound_dkim_value=$(awk -F= '$1 == "dkim_value" {sub(/^[^=]*=/, ""); print; exit}' "$outbound_dns_file")
+  outbound_spf_host=$(awk -F= '$1 == "spf_host" {sub(/^[^=]*=/, ""); print; exit}' "$outbound_dns_file")
+  outbound_spf_value=$(awk -F= '$1 == "spf_value" {sub(/^[^=]*=/, ""); print; exit}' "$outbound_dns_file")
+  outbound_dmarc_host=$(awk -F= '$1 == "dmarc_host" {sub(/^[^=]*=/, ""); print; exit}' "$outbound_dns_file")
+  outbound_dmarc_value=$(awk -F= '$1 == "dmarc_value" {sub(/^[^=]*=/, ""); print; exit}' "$outbound_dns_file")
+fi
+
 mail_dirs_ok=true
 for list in quarantine accepted spam banned archive trash drafts outbox sent logs; do
   if [ ! -d "$remote_root/$list" ]; then
@@ -2303,10 +2660,19 @@ printf 'remote_owl_bin_ok=%s\n' "$owl_bin_ok"
 printf 'remote_owl_daemon_bin_ok=%s\n' "$owl_daemon_bin_ok"
 printf 'remote_daemon_running=%s\n' "$daemon_running"
 printf 'remote_smtp_listening=%s\n' "$smtp_listening"
+printf 'remote_submission_listening=%s\n' "$submission_listening"
 printf 'remote_postfix_installed=%s\n' "$postfix_installed"
 printf 'remote_postfix_running=%s\n' "$postfix_running"
 printf 'remote_postfix_bridge_ok=%s\n' "$postfix_bridge_ok"
+printf 'remote_outbound_submission_ok=%s\n' "$outbound_submission_ok"
+printf 'remote_opendkim_running=%s\n' "$opendkim_running"
 printf 'remote_mail_dirs_ok=%s\n' "$mail_dirs_ok"
+printf 'remote_outbound_dkim_host=%s\n' "$outbound_dkim_host"
+printf 'remote_outbound_dkim_value=%s\n' "$outbound_dkim_value"
+printf 'remote_outbound_spf_host=%s\n' "$outbound_spf_host"
+printf 'remote_outbound_spf_value=%s\n' "$outbound_spf_value"
+printf 'remote_outbound_dmarc_host=%s\n' "$outbound_dmarc_host"
+printf 'remote_outbound_dmarc_value=%s\n' "$outbound_dmarc_value"
 REMOTE_VERIFY
 ) || return 1
 
@@ -2317,11 +2683,17 @@ remote_host_only=$(remote_target_host_component "$target_host")
   fi
   probe_port=25
   tcp_25_ok=true
+  tcp_587_ok=true
   if [ "$verify_mode" = "full" ]; then
     if tcp_port_reachable "$probe_host" "$probe_port" "$REMOTE_VERIFY_TCP_TIMEOUT_SECS"; then
       tcp_25_ok=true
     else
       tcp_25_ok=false
+    fi
+    if tcp_port_reachable "$probe_host" 587 "$REMOTE_VERIFY_TCP_TIMEOUT_SECS"; then
+      tcp_587_ok=true
+    else
+      tcp_587_ok=false
     fi
   fi
 
@@ -2332,6 +2704,8 @@ remote_host_only=$(remote_target_host_component "$target_host")
   mx_target_addr_json='[]'
   smtp_a_ok=false
   mx_ok=false
+  ptr_ok=false
+  ptr_json='[]'
   if [ "$verify_mode" = "full" ] && [ "$domain_configured" = "true" ] && [ -n "$smtp_host" ] && [ -n "$email_domain" ] && [ "$smtp_host" != "127.0.0.1" ] && [ "$smtp_host" != "localhost" ]; then
     expected_target_records=''
     if looks_like_ip_address "$remote_host_only"; then
@@ -2374,6 +2748,14 @@ remote_host_only=$(remote_target_host_component "$target_host")
     if lines_overlap "$expected_target_records" "$mx_target_addresses"; then
       mx_ok=true
     fi
+    expected_ipv4=$(printf '%s\n' "$expected_target_records" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
+    if [ -n "$expected_ipv4" ]; then
+      ptr_records=$(dns_ptr_values_for "$expected_ipv4")
+      ptr_json=$(printf '%s\n' "$ptr_records" | json_array_from_lines)
+      if printf '%s\n' "$ptr_records" | sed 's/\.$//' | grep -Fxiq "$smtp_host"; then
+        ptr_ok=true
+      fi
+    fi
   fi
 
 remote_os=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_os=/{print $2; exit}')
@@ -2383,12 +2765,42 @@ remote_owl_bin_ok=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_owl_bin_ok
 remote_owl_daemon_bin_ok=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_owl_daemon_bin_ok=/{print $2; exit}')
 remote_daemon_running=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_daemon_running=/{print $2; exit}')
 remote_smtp_listening=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_smtp_listening=/{print $2; exit}')
+remote_submission_listening=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_submission_listening=/{print $2; exit}')
 remote_postfix_installed=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_postfix_installed=/{print $2; exit}')
 remote_postfix_running=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_postfix_running=/{print $2; exit}')
 remote_postfix_bridge_ok=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_postfix_bridge_ok=/{print $2; exit}')
+remote_outbound_submission_ok=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_outbound_submission_ok=/{print $2; exit}')
+remote_opendkim_running=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_opendkim_running=/{print $2; exit}')
 remote_mail_dirs_ok=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_mail_dirs_ok=/{print $2; exit}')
+remote_outbound_dkim_host=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_outbound_dkim_host=/{sub(/^[^=]*=/, ""); print; exit}')
+remote_outbound_dkim_value=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_outbound_dkim_value=/{sub(/^[^=]*=/, ""); print; exit}')
+remote_outbound_spf_host=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_outbound_spf_host=/{sub(/^[^=]*=/, ""); print; exit}')
+remote_outbound_spf_value=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_outbound_spf_value=/{sub(/^[^=]*=/, ""); print; exit}')
+remote_outbound_dmarc_host=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_outbound_dmarc_host=/{sub(/^[^=]*=/, ""); print; exit}')
+remote_outbound_dmarc_value=$(printf '%s\n' "$remote_probe" | awk -F= '/^remote_outbound_dmarc_value=/{sub(/^[^=]*=/, ""); print; exit}')
 
-for bool_var in remote_owl_bin_ok remote_owl_daemon_bin_ok remote_daemon_running remote_smtp_listening remote_postfix_installed remote_postfix_running remote_postfix_bridge_ok remote_mail_dirs_ok tcp_25_ok smtp_a_ok mx_ok; do
+dkim_dns_ok=false
+spf_dns_ok=false
+dmarc_dns_ok=false
+if [ "$verify_mode" = "full" ]; then
+  if [ -n "$remote_outbound_dkim_host" ] && [ -n "$remote_outbound_dkim_value" ]; then
+    actual_dkim=$(dns_values_for TXT "$remote_outbound_dkim_host" | tr -d '"[:space:]')
+    expected_dkim=$(printf '%s' "$remote_outbound_dkim_value" | tr -d '[:space:]')
+    if [ -n "$actual_dkim" ] && [ "$actual_dkim" = "$expected_dkim" ]; then
+      dkim_dns_ok=true
+    fi
+  fi
+  if [ -n "$remote_outbound_spf_host" ] && [ -n "$remote_outbound_spf_value" ]; then
+    actual_spf=$(dns_values_for TXT "$remote_outbound_spf_host" | tr -d '"\r' | grep -F "$remote_outbound_spf_value" || true)
+    [ -n "$actual_spf" ] && spf_dns_ok=true
+  fi
+  if [ -n "$remote_outbound_dmarc_host" ] && [ -n "$remote_outbound_dmarc_value" ]; then
+    actual_dmarc=$(dns_values_for TXT "$remote_outbound_dmarc_host" | tr -d '"\r' | grep -F "$remote_outbound_dmarc_value" || true)
+    [ -n "$actual_dmarc" ] && dmarc_dns_ok=true
+  fi
+fi
+
+for bool_var in remote_owl_bin_ok remote_owl_daemon_bin_ok remote_daemon_running remote_smtp_listening remote_submission_listening remote_postfix_installed remote_postfix_running remote_postfix_bridge_ok remote_outbound_submission_ok remote_opendkim_running remote_mail_dirs_ok tcp_25_ok tcp_587_ok smtp_a_ok mx_ok ptr_ok dkim_dns_ok spf_dns_ok dmarc_dns_ok; do
   eval "val=\${$bool_var-}"
   case "$val" in
     true|false) ;;
@@ -2434,12 +2846,21 @@ fi
 if [ "$remote_smtp_listening" != "true" ]; then
   append_verify_issue 'remote SMTP is not listening on port 25'
 fi
+if [ "$remote_submission_listening" != "true" ]; then
+  append_verify_issue 'authenticated submission is not listening on port 587'
+fi
 if [ "$remote_postfix_installed" != "true" ]; then
   append_verify_issue 'postfix is not installed on remote host'
 elif [ "$remote_postfix_running" != "true" ]; then
   append_verify_issue 'postfix is installed but not running'
 elif [ "$remote_postfix_bridge_ok" != "true" ]; then
   append_verify_issue 'postfix is not routing local mail into Owl folders yet'
+fi
+if [ "$remote_outbound_submission_ok" != "true" ]; then
+  append_verify_issue 'authenticated outbound submission is not configured'
+fi
+if [ "$remote_opendkim_running" != "true" ]; then
+  append_verify_issue 'DKIM signing service is not running'
 fi
 if [ "$domain_configured" != "true" ]; then
   append_verify_issue 'domain is not configured in Owl Settings'
@@ -2450,14 +2871,29 @@ elif [ "$verify_mode" = "full" ]; then
   if [ "$mx_ok" != "true" ]; then
     append_verify_issue 'MX record does not resolve to the deployed server'
   fi
+  if [ "$ptr_ok" != "true" ]; then
+    append_verify_issue 'server IP reverse DNS (PTR) does not point to the SMTP host; set it at the VPS provider'
+  fi
+  if [ "$spf_dns_ok" != "true" ]; then
+    append_verify_issue 'SPF TXT record is missing or incorrect'
+  fi
+  if [ "$dkim_dns_ok" != "true" ]; then
+    append_verify_issue 'DKIM TXT record is missing or incorrect'
+  fi
+  if [ "$dmarc_dns_ok" != "true" ]; then
+    append_verify_issue 'DMARC TXT record is missing or incorrect'
+  fi
 fi
 if [ "$verify_mode" = "full" ] && [ "$tcp_25_ok" != "true" ]; then
   append_verify_warning 'SMTP port 25 probe from this machine failed (local network may block outbound port 25)'
 fi
+if [ "$verify_mode" = "full" ] && [ "$tcp_587_ok" != "true" ]; then
+  append_verify_issue 'authenticated submission port 587 is not reachable'
+fi
 
 if [ "$ready" = "true" ]; then
   verify_status='ok'
-  verify_message='Remote server is ready to receive internet email.'
+  verify_message='Remote server is ready to receive and send internet email.'
 else
   verify_status='bad'
   if [ -z "$verify_message" ]; then
@@ -2482,182 +2918,148 @@ jq -cn \
   --argjson remote_owl_daemon_bin_ok "$remote_owl_daemon_bin_ok" \
   --argjson remote_daemon_running "$remote_daemon_running" \
   --argjson remote_smtp_listening "$remote_smtp_listening" \
+  --argjson remote_submission_listening "$remote_submission_listening" \
   --argjson remote_postfix_installed "$remote_postfix_installed" \
   --argjson remote_postfix_running "$remote_postfix_running" \
   --argjson remote_postfix_bridge_ok "$remote_postfix_bridge_ok" \
+  --argjson remote_outbound_submission_ok "$remote_outbound_submission_ok" \
+  --argjson remote_opendkim_running "$remote_opendkim_running" \
   --argjson remote_mail_dirs_ok "$remote_mail_dirs_ok" \
   --argjson tcp_25_ok "$tcp_25_ok" \
+  --argjson tcp_587_ok "$tcp_587_ok" \
   --argjson smtp_a_ok "$smtp_a_ok" \
   --argjson mx_ok "$mx_ok" \
+  --argjson ptr_ok "$ptr_ok" \
+  --argjson spf_dns_ok "$spf_dns_ok" \
+  --argjson dkim_dns_ok "$dkim_dns_ok" \
+  --argjson dmarc_dns_ok "$dmarc_dns_ok" \
   --argjson smtp_a_records "$smtp_a_json" \
   --argjson mx_records "$mx_json" \
+  --argjson ptr_records "$ptr_json" \
   --argjson expected_target_records "$expected_target_json" \
   --argjson mx_target_hosts "$mx_target_host_json" \
   --argjson mx_target_addresses "$mx_target_addr_json" \
-  '{status:$status,message:$message,ready:$ready,probe_host:$probe_host,probe_port:$probe_port,domain_configured:$domain_configured,checks:{remote_owl_bin_ok:$remote_owl_bin_ok,remote_owl_daemon_bin_ok:$remote_owl_daemon_bin_ok,remote_daemon_running:$remote_daemon_running,remote_smtp_listening:$remote_smtp_listening,remote_postfix_installed:$remote_postfix_installed,remote_postfix_running:$remote_postfix_running,remote_postfix_bridge_ok:$remote_postfix_bridge_ok,remote_mail_dirs_ok:$remote_mail_dirs_ok,tcp_25_ok:$tcp_25_ok,smtp_a_ok:$smtp_a_ok,mx_ok:$mx_ok},records:{expected_target:$expected_target_records,smtp_a:$smtp_a_records,mx:$mx_records,mx_target_hosts:$mx_target_hosts,mx_target_addresses:$mx_target_addresses},remote:{os:$remote_os,arch:$remote_arch,env_smtp_host:$remote_env_smtp_host}}'
+  '{status:$status,message:$message,ready:$ready,probe_host:$probe_host,probe_port:$probe_port,domain_configured:$domain_configured,checks:{remote_owl_bin_ok:$remote_owl_bin_ok,remote_owl_daemon_bin_ok:$remote_owl_daemon_bin_ok,remote_daemon_running:$remote_daemon_running,remote_smtp_listening:$remote_smtp_listening,remote_submission_listening:$remote_submission_listening,remote_postfix_installed:$remote_postfix_installed,remote_postfix_running:$remote_postfix_running,remote_postfix_bridge_ok:$remote_postfix_bridge_ok,remote_outbound_submission_ok:$remote_outbound_submission_ok,remote_opendkim_running:$remote_opendkim_running,remote_mail_dirs_ok:$remote_mail_dirs_ok,tcp_25_ok:$tcp_25_ok,tcp_587_ok:$tcp_587_ok,smtp_a_ok:$smtp_a_ok,mx_ok:$mx_ok,ptr_ok:$ptr_ok,spf_dns_ok:$spf_dns_ok,dkim_dns_ok:$dkim_dns_ok,dmarc_dns_ok:$dmarc_dns_ok},records:{expected_target:$expected_target_records,smtp_a:$smtp_a_records,mx:$mx_records,mx_target_hosts:$mx_target_hosts,mx_target_addresses:$mx_target_addresses,ptr:$ptr_records},remote:{os:$remote_os,arch:$remote_arch,env_smtp_host:$remote_env_smtp_host}}'
 }
 
-smtp_send_test_message() {
+smtp_submit_test_message() {
   smtp_host=$1
-  recipient=$2
-  subject=$3
-  sender=$4
-  smtp_timeout=${5-5}
+  smtp_port=$2
+  smtp_username=$3
+  smtp_password=$4
+  recipient=$5
+  subject=$6
+  sender=$7
+  smtp_timeout=${8-5}
   if ! command -v python3 >/dev/null 2>&1; then
     printf '%s\n' "python3 is required to send SMTP test mail" >&2
     return 1
   fi
 
-  python3 - "$smtp_host" "$recipient" "$subject" "$sender" "$smtp_timeout" <<'PY'
+  python3 - "$smtp_host" "$smtp_port" "$smtp_username" "$smtp_password" "$recipient" "$subject" "$sender" "$smtp_timeout" <<'PY'
 import smtplib
+import ssl
 import sys
 from email.utils import formatdate, make_msgid
 
 host = sys.argv[1]
-recipient = sys.argv[2]
-subject = sys.argv[3]
-sender = sys.argv[4]
-timeout = float(sys.argv[5])
+port = int(sys.argv[2])
+username = sys.argv[3]
+password = sys.argv[4]
+recipient = sys.argv[5]
+subject = sys.argv[6]
+sender = sys.argv[7]
+timeout = float(sys.argv[8])
 
 body = (
-    "This is an Owl remote SMTP receive test.\r\n"
-    "If this appears in Inbox after sync, remote receive is working.\r\n"
+    "This message was sent through Stellar's authenticated mail submission service.\r\n"
+    "If it arrived, outbound TLS, authentication, DKIM signing, and delivery are working.\r\n"
 )
 msg = (
     f"From: {sender}\r\n"
     f"To: {recipient}\r\n"
     f"Subject: {subject}\r\n"
     f"Date: {formatdate(localtime=False)}\r\n"
-    f"Message-ID: {make_msgid('owl-remote-test')}\r\n"
+    f"Message-ID: {make_msgid('stellar-outbound-test', domain=sender.rsplit('@', 1)[-1])}\r\n"
     "\r\n"
     f"{body}"
 )
 
-with smtplib.SMTP(host=host, port=25, timeout=timeout) as smtp:
-    smtp.ehlo_or_helo_if_needed()
+with smtplib.SMTP(host=host, port=port, timeout=timeout) as smtp:
+    smtp.ehlo()
+    smtp.starttls(context=ssl.create_default_context())
+    smtp.ehlo()
+    smtp.login(username, password)
     smtp.sendmail(sender, [recipient], msg)
+print(msg.split("Message-ID: <", 1)[1].split(">", 1)[0])
 PY
 }
 
-remote_smtp_send_test_message() {
+remote_delivery_status_over_ssh() {
   target_host=$1
   key_path=$2
   ssh_key_password=${3-}
   ssh_port=${4-}
-  recipient=$5
-  subject=$6
-  sender=$7
-  smtp_timeout=${8-5}
-  payload_b64=$(printf '%s\n%s\n%s\n%s\n' "$recipient" "$subject" "$sender" "$smtp_timeout" | base64 | tr -d '\r\n')
-  ssh_exec "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" sh -s -- "$payload_b64" <<'REMOTE_SMTP_TEST'
+  message_id=$5
+  message_id_b64=$(printf '%s' "$message_id" | base64 | tr -d '\r\n')
+
+  ssh_exec "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" sh -s -- "$message_id_b64" <<'REMOTE_DELIVERY_STATUS'
 set -eu
-
-payload_b64=$1
-decoded_payload=''
-if decoded_payload=$(printf '%s' "$payload_b64" | base64 --decode 2>/dev/null); then
+message_id_b64=$1
+if message_id=$(printf '%s' "$message_id_b64" | base64 --decode 2>/dev/null); then
   :
-elif decoded_payload=$(printf '%s' "$payload_b64" | base64 -d 2>/dev/null); then
+elif message_id=$(printf '%s' "$message_id_b64" | base64 -d 2>/dev/null); then
   :
 else
-  printf '%s\n' 'remote send-test payload decode failed' >&2
-  exit 1
-fi
-recipient=$(printf '%s\n' "$decoded_payload" | sed -n '1p')
-subject=$(printf '%s\n' "$decoded_payload" | sed -n '2p')
-sender=$(printf '%s\n' "$decoded_payload" | sed -n '3p')
-smtp_timeout=$(printf '%s\n' "$decoded_payload" | sed -n '4p')
-case "$smtp_timeout" in
-  ''|*[!0-9]*)
-    smtp_timeout=5
-    ;;
-esac
-
-body='This is an Owl remote SMTP receive test.
-If this appears in Inbox after sync, remote receive is working.'
-
-if command -v sendmail >/dev/null 2>&1; then
-  {
-    printf 'From: %s\n' "$sender"
-    printf 'To: %s\n' "$recipient"
-    printf 'Subject: %s\n' "$subject"
-    printf 'Date: %s\n' "$(date -R)"
-    printf '\n'
-    printf '%s\n' "$body"
-  } | sendmail -t
+  printf '%s\n' "delivery_status=unknown"
   exit 0
 fi
 
-if command -v python3 >/dev/null 2>&1; then
-  python3 - "$recipient" "$subject" "$sender" "$smtp_timeout" <<'PY'
-import smtplib
-import sys
-from email.utils import formatdate, make_msgid
-
-recipient = sys.argv[1]
-subject = sys.argv[2]
-sender = sys.argv[3]
-timeout = float(sys.argv[4])
-
-body = (
-    "This is an Owl remote SMTP receive test.\r\n"
-    "If this appears in Inbox after sync, remote receive is working.\r\n"
-)
-msg = (
-    f"From: {sender}\r\n"
-    f"To: {recipient}\r\n"
-    f"Subject: {subject}\r\n"
-    f"Date: {formatdate(localtime=False)}\r\n"
-    f"Message-ID: {make_msgid('owl-remote-test')}\r\n"
-    "\r\n"
-    f"{body}"
-)
-
-with smtplib.SMTP(host='127.0.0.1', port=25, timeout=timeout) as smtp:
-    smtp.ehlo_or_helo_if_needed()
-    smtp.sendmail(sender, [recipient], msg)
-PY
-  exit 0
-fi
-
-printf '%s\n' 'remote send-test requires sendmail or python3' >&2
-exit 1
-REMOTE_SMTP_TEST
-}
-
-remote_test_subject_seen() {
-  target_host=$1
-  key_path=$2
-  ssh_key_password=${3-}
-  ssh_port=${4-}
-  subject=$5
-  subject_b64=$(printf '%s' "$subject" | base64 | tr -d '\r\n')
-  ssh_exec "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" sh -s -- "$subject_b64" <<'REMOTE_TEST_SUBJECT'
-set -eu
-subject_b64=$1
-if subject=$(printf '%s' "$subject_b64" | base64 --decode 2>/dev/null); then
-  :
-elif subject=$(printf '%s' "$subject_b64" | base64 -d 2>/dev/null); then
-  :
-else
-  printf '%s\n' false
-  exit 0
-fi
-
-if grep -R -F -- "$subject" "$HOME/mail/accepted" "$HOME/mail/quarantine" "$HOME/mail/spam" "$HOME/mail/banned" >/dev/null 2>&1; then
-  printf '%s\n' true
-else
-  printf '%s\n' false
-fi
-REMOTE_TEST_SUBJECT
-}
-
-local_test_subject_seen() {
-  subject=$1
-  if grep -R -F -- "$subject" "$ROOT/accepted" "$ROOT/quarantine" "$ROOT/spam" "$ROOT/banned" >/dev/null 2>&1; then
-    printf '%s\n' true
+read_mail_log() {
+  if [ -r /var/log/mail.log ]; then
+    cat /var/log/mail.log
+  elif command -v sudo >/dev/null 2>&1 && sudo -n test -r /var/log/mail.log; then
+    sudo -n cat /var/log/mail.log
   else
-    printf '%s\n' false
+    journalctl --no-pager -n 1000 2>/dev/null || true
   fi
+}
+
+attempt=0
+while [ "$attempt" -lt 12 ]; do
+  log_text=$(read_mail_log)
+  queue_id=$(printf '%s\n' "$log_text" |
+    grep -F "message-id=<$message_id>" |
+    tail -n 1 |
+    sed -n 's/^.*postfix\/cleanup[^:]*: \([A-F0-9][A-F0-9]*\):.*$/\1/p')
+  if [ -n "$queue_id" ]; then
+    result_line=$(printf '%s\n' "$log_text" |
+      grep -F "$queue_id:" |
+      grep -E 'status=(sent|bounced|deferred)' |
+      tail -n 1 || true)
+    case "$result_line" in
+      *status=sent*)
+        printf '%s\n' "delivery_status=sent"
+        printf 'delivery_detail=%s\n' "$result_line"
+        exit 0
+        ;;
+      *status=bounced*)
+        printf '%s\n' "delivery_status=bounced"
+        printf 'delivery_detail=%s\n' "$result_line"
+        exit 0
+        ;;
+      *status=deferred*)
+        printf '%s\n' "delivery_status=deferred"
+        printf 'delivery_detail=%s\n' "$result_line"
+        exit 0
+        ;;
+    esac
+  fi
+  attempt=$((attempt + 1))
+  sleep 1
+done
+printf '%s\n' "delivery_status=pending"
+REMOTE_DELIVERY_STATUS
 }
 
 normalize_domain_input() {
@@ -2738,6 +3140,17 @@ dns_values_for() {
       /mail is handled by/ {print $(NF-1) " " $NF}
     '
     return 0
+  fi
+}
+
+dns_ptr_values_for() {
+  address=$1
+  if command -v dig >/dev/null 2>&1; then
+    dig +time=2 +tries=1 +short -x "$address" 2>/dev/null | sed 's/[[:space:]]*$//' | awk 'NF'
+    return 0
+  fi
+  if command -v host >/dev/null 2>&1; then
+    host "$address" 2>/dev/null | awk '/pointer/ {print $NF}'
   fi
 }
 
@@ -2924,6 +3337,7 @@ settings_env_set() {
     }
   ' "$ENV_PATH" >"$tmp"
   mv "$tmp" "$ENV_PATH"
+  chmod 0600 "$ENV_PATH"
 }
 
 llm_recommended_lines() {
@@ -4902,6 +5316,13 @@ case "$action" in
     smtp_aaaa=$(dns_values_for AAAA "$smtp_host")
     smtp_cname=$(dns_values_for CNAME "$smtp_host")
     mx_records=$(dns_values_for MX "$email_domain")
+    remote_state_json=$(load_remote_state_json)
+    outbound_dkim_host=$(printf '%s\n' "$remote_state_json" | jq -r '.outbound_dns.dkim.host // ""')
+    outbound_dkim_value=$(printf '%s\n' "$remote_state_json" | jq -r '.outbound_dns.dkim.value // ""')
+    outbound_spf_host=$(printf '%s\n' "$remote_state_json" | jq -r '.outbound_dns.spf.host // ""')
+    outbound_spf_value=$(printf '%s\n' "$remote_state_json" | jq -r '.outbound_dns.spf.value // ""')
+    outbound_dmarc_host=$(printf '%s\n' "$remote_state_json" | jq -r '.outbound_dns.dmarc.host // ""')
+    outbound_dmarc_value=$(printf '%s\n' "$remote_state_json" | jq -r '.outbound_dns.dmarc.value // ""')
     public_ip=$(detect_public_ip)
     certbot_installed=false
     if command -v certbot >/dev/null 2>&1; then
@@ -4922,7 +5343,30 @@ case "$action" in
     if printf '%s\n' "$mx_records" | grep -Eiq "(^|[[:space:]])$smtp_host\\.?($|[[:space:]])"; then
       mx_ok=true
     fi
+    spf_ok=false
+    dkim_ok=false
+    dmarc_ok=false
+    if [ -n "$outbound_spf_host" ] && [ -n "$outbound_spf_value" ] &&
+      dns_values_for TXT "$outbound_spf_host" | tr -d '"\r' | grep -Fq "$outbound_spf_value"; then
+      spf_ok=true
+    fi
+    if [ -n "$outbound_dkim_host" ] && [ -n "$outbound_dkim_value" ]; then
+      actual_dkim=$(dns_values_for TXT "$outbound_dkim_host" | tr -d '"[:space:]')
+      expected_dkim=$(printf '%s' "$outbound_dkim_value" | tr -d '[:space:]')
+      if [ -n "$actual_dkim" ] && [ "$actual_dkim" = "$expected_dkim" ]; then
+        dkim_ok=true
+      fi
+    fi
+    if [ -n "$outbound_dmarc_host" ] && [ -n "$outbound_dmarc_value" ] &&
+      dns_values_for TXT "$outbound_dmarc_host" | tr -d '"\r' | grep -Fq "$outbound_dmarc_value"; then
+      dmarc_ok=true
+    fi
     expected_ip=$(expected_mail_target_ip "$settings_mode" "$remote_target_hint")
+    ptr_ok=false
+    if [ -n "$expected_ip" ] &&
+      dns_ptr_values_for "$expected_ip" | sed 's/\.$//' | grep -Fxiq "$smtp_host"; then
+      ptr_ok=true
+    fi
     jq -n \
       --arg domain "$email_domain" \
       --arg mode "$settings_mode" \
@@ -4930,6 +5374,12 @@ case "$action" in
       --arg smtp_host "$smtp_host" \
       --arg public_ip "$public_ip" \
       --arg expected_ip "$expected_ip" \
+      --arg outbound_dkim_host "$outbound_dkim_host" \
+      --arg outbound_dkim_value "$outbound_dkim_value" \
+      --arg outbound_spf_host "$outbound_spf_host" \
+      --arg outbound_spf_value "$outbound_spf_value" \
+      --arg outbound_dmarc_host "$outbound_dmarc_host" \
+      --arg outbound_dmarc_value "$outbound_dmarc_value" \
       --argjson certbot_installed "$certbot_installed" \
       --argjson root_a_records "$root_a_json" \
       --argjson smtp_a_records "$smtp_a_json" \
@@ -4939,6 +5389,10 @@ case "$action" in
       --argjson smtp_ok "$smtp_ok" \
       --argjson smtp_cname_ok "$smtp_has_cname" \
       --argjson mx_ok "$mx_ok" \
+      --argjson ptr_ok "$ptr_ok" \
+      --argjson spf_ok "$spf_ok" \
+      --argjson dkim_ok "$dkim_ok" \
+      --argjson dmarc_ok "$dmarc_ok" \
       '{
         ok:true,
         domain:$domain,
@@ -4951,7 +5405,11 @@ case "$action" in
           root_a_ok:$root_ok,
           smtp_a_ok:$smtp_ok,
           smtp_cname_ok:$smtp_cname_ok,
-          mx_ok:$mx_ok
+          mx_ok:$mx_ok,
+          ptr_ok:$ptr_ok,
+          spf_ok:$spf_ok,
+          dkim_ok:$dkim_ok,
+          dmarc_ok:$dmarc_ok
         },
         records:{
           root_a:$root_a_records,
@@ -4959,11 +5417,15 @@ case "$action" in
           smtp_cname:$smtp_cname_records,
           mx:$mx_records
         },
-        suggested_records:[
+        suggested_records:([
           {type:"A",name:$domain,value:$expected_ip},
           {type:"A",name:$smtp_host,value:$expected_ip},
           {type:"MX",name:$domain,value:$smtp_host,priority:10}
         ]
+        + (if ($expected_ip | length) > 0 then [{type:"PTR",name:$expected_ip,value:$smtp_host}] else [] end)
+        + (if ($outbound_spf_host | length) > 0 then [{type:"TXT",name:$outbound_spf_host,value:$outbound_spf_value}] else [] end)
+        + (if ($outbound_dkim_host | length) > 0 then [{type:"TXT",name:$outbound_dkim_host,value:$outbound_dkim_value}] else [] end)
+        + (if ($outbound_dmarc_host | length) > 0 then [{type:"TXT",name:$outbound_dmarc_host,value:$outbound_dmarc_value}] else [] end))
       }'
     ;;
 
@@ -5483,10 +5945,41 @@ case "$action" in
       domain_autoset_note="Domain auto-set to $smtp_host_mail (SMTP host: $smtp_host) based on remote target."
     fi
 
+    outbound_dkim_host=''
+    outbound_dkim_value=''
+    outbound_spf_host=''
+    outbound_spf_value=''
+    outbound_dmarc_host=''
+    outbound_dmarc_value=''
     if engine_install_output=$(install_bundled_engine_on_remote "$remote_host" "$remote_key_path" "$ssh_key_password" "$remote_port" 2>&1); then
       if remote_output=$(remote_deploy_over_ssh "$remote_host" "$remote_key_path" "$ssh_key_password" "$remote_port" "$smtp_host" "$remote_mail_host_hint" "${STELLAR_ADDRESS_ROUTES_B64-}" 2>&1); then
-        deploy_output=$(printf '%s\n%s\n' "$engine_install_output" "$remote_output")
-        deploy_status=ok
+        if submission_credentials=$(remote_submission_credentials_over_ssh "$remote_host" "$remote_key_path" "$ssh_key_password" "$remote_port" 2>&1) &&
+          outbound_dns=$(remote_outbound_dns_over_ssh "$remote_host" "$remote_key_path" "$ssh_key_password" "$remote_port" 2>&1); then
+          submission_username=$(printf '%s\n' "$submission_credentials" | awk -F= '/^username=/{sub(/^[^=]*=/, ""); print; exit}')
+          submission_password=$(printf '%s\n' "$submission_credentials" | awk -F= '/^password=/{sub(/^[^=]*=/, ""); print; exit}')
+          outbound_dkim_host=$(printf '%s\n' "$outbound_dns" | awk -F= '/^dkim_host=/{sub(/^[^=]*=/, ""); print; exit}')
+          outbound_dkim_value=$(printf '%s\n' "$outbound_dns" | awk -F= '/^dkim_value=/{sub(/^[^=]*=/, ""); print; exit}')
+          outbound_spf_host=$(printf '%s\n' "$outbound_dns" | awk -F= '/^spf_host=/{sub(/^[^=]*=/, ""); print; exit}')
+          outbound_spf_value=$(printf '%s\n' "$outbound_dns" | awk -F= '/^spf_value=/{sub(/^[^=]*=/, ""); print; exit}')
+          outbound_dmarc_host=$(printf '%s\n' "$outbound_dns" | awk -F= '/^dmarc_host=/{sub(/^[^=]*=/, ""); print; exit}')
+          outbound_dmarc_value=$(printf '%s\n' "$outbound_dns" | awk -F= '/^dmarc_value=/{sub(/^[^=]*=/, ""); print; exit}')
+          if [ -n "$submission_username" ] && [ -n "$submission_password" ] &&
+            [ -n "$outbound_dkim_host" ] && [ -n "$outbound_dkim_value" ]; then
+            settings_env_set smtp_host "$smtp_host"
+            settings_env_set smtp_port 587
+            settings_env_set smtp_username "$submission_username"
+            settings_env_set smtp_password "$submission_password"
+            settings_env_set smtp_starttls true
+            deploy_output=$(printf '%s\n%s\n%s\n' "$engine_install_output" "$remote_output" "$outbound_dns")
+            deploy_status=ok
+          else
+            deploy_output=$(printf '%s\n%s\n' "$engine_install_output" "remote deploy: outbound configuration was incomplete")
+            deploy_status=bad
+          fi
+        else
+          deploy_output=$(printf '%s\n%s\n' "$engine_install_output" "remote deploy: unable to retrieve outbound configuration")
+          deploy_status=bad
+        fi
       else
         deploy_output=$(printf '%s\n%s\n' "$engine_install_output" "$remote_output")
         deploy_status=bad
@@ -5553,9 +6046,20 @@ case "$action" in
       --arg deploy_message "$deploy_message" \
       --arg verify_status "$verify_status" \
       --arg verify_message "$verify_message" \
+      --arg outbound_dkim_host "$outbound_dkim_host" \
+      --arg outbound_dkim_value "$outbound_dkim_value" \
+      --arg outbound_spf_host "$outbound_spf_host" \
+      --arg outbound_spf_value "$outbound_spf_value" \
+      --arg outbound_dmarc_host "$outbound_dmarc_host" \
+      --arg outbound_dmarc_value "$outbound_dmarc_value" \
       '.host=$host
        | .key_path=$key_path
        | .port=$port
+       | .outbound_dns={
+           dkim:{host:$outbound_dkim_host,value:$outbound_dkim_value},
+           spf:{host:$outbound_spf_host,value:$outbound_spf_value},
+           dmarc:{host:$outbound_dmarc_host,value:$outbound_dmarc_value}
+         }
        | .last_deploy_at=$now_ts
        | .last_deploy_status=$deploy_status
        | .last_deploy_message=$deploy_message
@@ -5707,252 +6211,112 @@ case "$action" in
     ;;
 
   settings-remote-send-test)
-    require_cmd ssh
-    require_cmd rsync
     remote_state_json=$(load_remote_state_json)
-
-    host_arg=$(normalize_remote_target_input "${3-}")
-    key_arg=$(normalize_ssh_key_path_input "${4-}")
+    remote_host=$(normalize_remote_target_input "${3-}")
+    remote_key_path=$(normalize_ssh_key_path_input "${4-}")
     ssh_key_password_arg=${5-}
-    ssh_port_arg=$(normalize_remote_port_input "${6-}")
-
-    if [ -n "$host_arg" ]; then
-      remote_host=$host_arg
-    else
-      remote_host=$(printf '%s\n' "$remote_state_json" | jq -r '.host')
-    fi
-    if [ -n "$key_arg" ]; then
-      remote_key_path=$key_arg
-    else
-      remote_key_path=$(printf '%s\n' "$remote_state_json" | jq -r '.key_path')
-    fi
-    if [ -n "$ssh_port_arg" ]; then
-      remote_port=$ssh_port_arg
-    else
-      remote_port=$(printf '%s\n' "$remote_state_json" | jq -r '.port // ""')
-    fi
-
-    if ! validate_remote_target "$remote_host"; then
-      printf '%s\n' "owl-desktop-backend: set a valid remote host before sending test mail" >&2
+    remote_port=$(normalize_remote_port_input "${6-}")
+    outbound_recipient=${7-}
+    [ -n "$remote_host" ] || remote_host=$(printf '%s\n' "$remote_state_json" | jq -r '.host // ""')
+    [ -n "$remote_key_path" ] || remote_key_path=$(printf '%s\n' "$remote_state_json" | jq -r '.key_path // ""')
+    [ -n "$remote_port" ] || remote_port=$(printf '%s\n' "$remote_state_json" | jq -r '.port // ""')
+    validate_remote_target "$remote_host" || {
+      printf '%s\n' "owl-desktop-backend: set a valid remote host before testing outbound mail" >&2
       exit 2
-    fi
-    if ! validate_ssh_key_path "$remote_key_path"; then
-      printf '%s\n' "owl-desktop-backend: set a readable SSH key file path with no spaces before sending test mail" >&2
+    }
+    validate_ssh_key_path "$remote_key_path" || {
+      printf '%s\n' "owl-desktop-backend: set a readable SSH key before testing outbound mail" >&2
       exit 2
-    fi
-    if ! validate_remote_port "$remote_port"; then
-      printf '%s\n' "owl-desktop-backend: provide a valid SSH port between 1 and 65535" >&2
-      exit 2
-    fi
-
+    }
     if ! ssh_key_password=$(resolve_remote_ssh_key_password "$remote_state_json" "$remote_key_path" "$ssh_key_password_arg"); then
       exit 2
     fi
-
+    if ! validate_test_recipient_email "$outbound_recipient"; then
+      printf '%s\n' "owl-desktop-backend: enter a valid external address for the outbound test" >&2
+      exit 2
+    fi
     smtp_host=$(settings_env_get smtp_host)
+    smtp_port=$(settings_env_get smtp_port)
+    smtp_username=$(settings_env_get smtp_username)
+    smtp_password=$(settings_env_get smtp_password)
     email_domain=$(email_domain_from_smtp_host "$smtp_host")
-    domain_configured_json=$(domain_configured_for_smtp_host "$smtp_host")
-    test_recipient=$(load_test_recipient_value)
-    if ! validate_test_recipient_email "$test_recipient"; then
-      printf '%s\n' "owl-desktop-backend: set a valid email address in Settings > My Email Address before sending remote test email" >&2
+    sender_addr=$(load_test_recipient_value)
+    if ! validate_test_recipient_email "$sender_addr" ||
+      [ "$(email_domain_from_recipient "$sender_addr")" != "$email_domain" ]; then
+      sender_addr="postmaster@$email_domain"
+    fi
+    case "$smtp_port" in
+      ''|*[!0-9]*) smtp_port=587 ;;
+    esac
+    if [ -z "$smtp_host" ] || [ -z "$smtp_username" ] || [ -z "$smtp_password" ]; then
+      printf '%s\n' "owl-desktop-backend: deploy the remote server before testing outbound sending" >&2
       exit 2
     fi
 
-    verify_status=bad
-    verify_message='Remote verification failed.'
-    verify_json='{}'
-    if verify_json=$(remote_verify_status_json "$remote_host" "$remote_key_path" "$ssh_key_password" "$remote_port" "$smtp_host" "$email_domain" "$domain_configured_json" quick 2>&1); then
-      verify_status=$(printf '%s\n' "$verify_json" | jq -r '.status // "bad"' 2>/dev/null || printf 'bad')
-      verify_message=$(printf '%s\n' "$verify_json" | jq -r '.message // "Remote verification failed."' 2>/dev/null || compact_status_message "$verify_json")
-    else
-      verify_message=$(compact_status_message "$verify_json")
-      if [ -z "$verify_message" ]; then
-        verify_message='Remote verification failed.'
-      fi
-      verify_json=$(jq -cn --arg status bad --arg message "$verify_message" '{status:$status,message:$message,ready:false}')
-    fi
-
-    remote_host_only=$(remote_target_host_component "$remote_host")
-    smtp_target_host=$smtp_host
-    if [ -z "$smtp_target_host" ] || [ "$smtp_target_host" = "127.0.0.1" ] || [ "$smtp_target_host" = "localhost" ]; then
-      smtp_target_host=$remote_host_only
-    fi
-
-    recipient_domain=$(email_domain_from_recipient "$test_recipient")
-    sender_domain=$recipient_domain
-    if [ -z "$sender_domain" ]; then
-      sender_domain=$email_domain
-    fi
-    if [ -z "$sender_domain" ] || looks_like_ip_address "$sender_domain"; then
-      sender_domain='local.invalid'
-    fi
-    sender_addr="owl-test@$sender_domain"
-    test_subject="Owl Remote Receive Test $(current_utc_timestamp)"
-
+    test_subject="Stellar Outbound Test $(current_utc_timestamp)"
     test_status=bad
-    test_message='Remote test email failed.'
+    test_message="Outbound test failed."
     test_output=''
-    sync_status=idle
-    sync_message=''
-    sync_output=''
-    copied_count_num=0
-    send_status=failed
-    send_detail=''
-    fallback_detail=''
-    delivery_seen_remote=false
-    delivery_seen_local=false
-    if send_output=$(smtp_send_test_message "$smtp_target_host" "$test_recipient" "$test_subject" "$sender_addr" "$SMTP_SEND_TIMEOUT_SECS" 2>&1); then
-      send_status=local
-      send_detail=$(compact_status_message "$send_output")
-    else
-      send_detail=$(compact_status_message "$send_output")
-      if fallback_output=$(remote_smtp_send_test_message "$remote_host" "$remote_key_path" "$ssh_key_password" "$remote_port" "$test_recipient" "$test_subject" "$sender_addr" "$SMTP_SEND_TIMEOUT_SECS" 2>&1); then
-        send_status=remote_fallback
-        fallback_detail=$(compact_status_message "$fallback_output")
-      else
-        fallback_detail=$(compact_status_message "$fallback_output")
-      fi
-    fi
-
-    if [ "$send_status" = "local" ] || [ "$send_status" = "remote_fallback" ]; then
-      if [ "$send_status" = "remote_fallback" ]; then
-        if [ -n "$fallback_detail" ]; then
-          test_output="$fallback_detail"
-        else
-          test_output='remote fallback send succeeded'
-        fi
-      else
-        test_output="$send_detail"
-      fi
-      if copied_count=$(remote_sync_over_ssh "$remote_host" "$remote_key_path" "$ssh_key_password" "$remote_port" 2>&1); then
-        copied_count_num=$(printf '%s' "$copied_count" | tr -d '[:space:]')
-        if [ -z "$copied_count_num" ] || [ "$copied_count_num" -eq 0 ] 2>/dev/null; then
-          copied_count_num=0
-          sync_message='Remote sync complete. Test email may still be processing; check again in a few seconds.'
-        else
-          sync_message="Remote sync complete. Copied ${copied_count_num} new files."
-        fi
-        sync_status=ok
-        sync_output="$sync_message"
-        delivery_seen_local=$(local_test_subject_seen "$test_subject" 2>/dev/null || printf 'false')
-        if [ "$delivery_seen_local" != "true" ]; then
-          delivery_seen_remote=$(remote_test_subject_seen "$remote_host" "$remote_key_path" "$ssh_key_password" "$remote_port" "$test_subject" 2>/dev/null || printf 'false')
-        else
-          delivery_seen_remote=true
-        fi
-
-        retry_idx=1
-        while [ "$delivery_seen_local" != "true" ] && [ "$retry_idx" -le "$SEND_TEST_SYNC_RETRY_ATTEMPTS" ]; do
-          sleep "$SEND_TEST_SYNC_RETRY_DELAY_SECS"
-          if retry_copied=$(remote_sync_over_ssh "$remote_host" "$remote_key_path" "$ssh_key_password" "$remote_port" 2>/dev/null); then
-            retry_copied_num=$(printf '%s' "$retry_copied" | tr -d '[:space:]')
-            if [ -n "$retry_copied_num" ] && [ "$retry_copied_num" -gt 0 ] 2>/dev/null; then
-              copied_count_num=$((copied_count_num + retry_copied_num))
-            fi
-          fi
-          delivery_seen_local=$(local_test_subject_seen "$test_subject" 2>/dev/null || printf 'false')
-          if [ "$delivery_seen_remote" != "true" ]; then
-            delivery_seen_remote=$(remote_test_subject_seen "$remote_host" "$remote_key_path" "$ssh_key_password" "$remote_port" "$test_subject" 2>/dev/null || printf 'false')
-          fi
-          retry_idx=$((retry_idx + 1))
-        done
-
-        if [ "$delivery_seen_local" = "true" ]; then
+    if message_id=$(smtp_submit_test_message \
+      "$smtp_host" \
+      "$smtp_port" \
+      "$smtp_username" \
+      "$smtp_password" \
+      "$outbound_recipient" \
+      "$test_subject" \
+      "$sender_addr" \
+      "$SMTP_SEND_TIMEOUT_SECS" 2>&1); then
+      delivery_output=$(remote_delivery_status_over_ssh \
+        "$remote_host" \
+        "$remote_key_path" \
+        "$ssh_key_password" \
+        "$remote_port" \
+        "$message_id" 2>&1 || true)
+      delivery_status=$(printf '%s\n' "$delivery_output" | awk -F= '/^delivery_status=/{print $2; exit}')
+      delivery_detail=$(printf '%s\n' "$delivery_output" | awk -F= '/^delivery_detail=/{sub(/^[^=]*=/, ""); print; exit}')
+      test_output=$delivery_detail
+      case "$delivery_status" in
+        sent)
           test_status=ok
-          if [ "$copied_count_num" -gt 0 ] 2>/dev/null; then
-            sync_message="Remote sync complete. Copied ${copied_count_num} new files and confirmed local delivery."
-          else
-            sync_message='Remote sync complete. Test email confirmed in local Owl folders.'
-          fi
-          sync_output="$sync_message"
-          if [ "$send_status" = "remote_fallback" ]; then
-            test_message="Sent test email to $test_recipient using remote fallback (local SMTP probe was blocked). $sync_message"
-          else
-            test_message="Sent test email to $test_recipient via $smtp_target_host. $sync_message"
-          fi
-        elif [ "$delivery_seen_remote" = "true" ]; then
-          test_status=bad
-          sync_message='Remote sync ran, but test subject is still missing in local Owl folders.'
-          sync_output="$sync_message"
-          if [ "$send_status" = "remote_fallback" ]; then
-            test_message='SMTP accepted and remote Owl received the test email, but local sync did not retrieve it yet. Run Check Remote Mail again after a moment.'
-          else
-            test_message='SMTP accepted the test email, but local sync did not retrieve it yet. Run Check Remote Mail again after a moment.'
-          fi
-        else
-          test_status=bad
-          test_message='Test email reached SMTP but did not arrive in remote Owl folders. Check postfix routing and recipient mapping.'
-          sync_message='Remote sync complete, but test subject was not found in remote/local Owl folders.'
-          sync_output="$sync_message"
-        fi
-      else
-        sync_status=bad
-        sync_output=$(compact_status_message "$copied_count")
-        if [ -z "$sync_output" ]; then
-          sync_output='Remote sync failed after sending test email.'
-        fi
-        sync_message="$sync_output"
-        test_status=bad
-        if [ "$send_status" = "remote_fallback" ]; then
-          test_message="Sent test email to $test_recipient using remote fallback, but sync failed: $sync_message"
-        else
-          test_message="Sent test email to $test_recipient via $smtp_target_host, but sync failed: $sync_message"
-        fi
-      fi
+          test_message="Outbound delivery accepted by $outbound_recipient. Subject: $test_subject"
+          ;;
+        bounced)
+          test_message="Outbound delivery to $outbound_recipient was rejected: $(compact_status_message "$delivery_detail")"
+          ;;
+        deferred)
+          test_status=pending
+          test_message="Outbound delivery to $outbound_recipient is temporarily deferred: $(compact_status_message "$delivery_detail")"
+          ;;
+        *)
+          test_status=pending
+          test_message="Outbound message is queued for $outbound_recipient. Check again shortly for subject: $test_subject"
+          ;;
+      esac
     else
-      test_output="$send_detail"
-      if [ -n "$fallback_detail" ]; then
-        test_message="Failed to send test email to $test_recipient via $smtp_target_host: $send_detail; remote fallback also failed: $fallback_detail"
-      elif [ -n "$test_output" ]; then
-        test_message="Failed to send test email to $test_recipient via $smtp_target_host: $test_output"
-      fi
+      test_output=$message_id
+      test_message="Outbound submission to $outbound_recipient failed: $(compact_status_message "$test_output")"
     fi
-
-    test_message=$(compact_status_message "$test_message")
     now_ts=$(current_utc_timestamp)
     updated_remote_json=$(printf '%s\n' "$remote_state_json" | jq -c \
-      --arg host "$remote_host" \
-      --arg key_path "$remote_key_path" \
-      --arg port "$remote_port" \
+      --arg recipient "$outbound_recipient" \
       --arg now_ts "$now_ts" \
-      --arg verify_status "$verify_status" \
-      --arg verify_message "$verify_message" \
       --arg test_status "$test_status" \
       --arg test_message "$test_message" \
-      --arg sync_status "$sync_status" \
-      --arg sync_message "$sync_message" \
-      '.host=$host
-       | .key_path=$key_path
-       | .port=$port
-       | .last_verify_at=$now_ts
-       | .last_verify_status=$verify_status
-       | .last_verify_message=$verify_message
+      '.outbound_test_recipient=$recipient
        | .last_test_at=$now_ts
        | .last_test_status=$test_status
-       | .last_test_message=$test_message
-       | if $sync_status != "idle" then
-           .last_sync_at=$now_ts
-           | .last_sync_status=$sync_status
-           | .last_sync_message=$sync_message
-         else
-           .
-         end')
+       | .last_test_message=$test_message')
     save_remote_state_json "$updated_remote_json"
-
     jq -n \
       --arg message "$test_message" \
-      --arg recipient "$test_recipient" \
+      --arg recipient "$outbound_recipient" \
       --arg sender "$sender_addr" \
-      --arg smtp_host "$smtp_target_host" \
-      --argjson copied_files "${copied_count_num:-0}" \
-      --argjson verify "$verify_json" \
-      --argjson remote "$updated_remote_json" \
+      --arg subject "$test_subject" \
+      --arg smtp_host "$smtp_host" \
       --arg test_status "$test_status" \
       --arg test_output "$test_output" \
-      --arg sync_status "$sync_status" \
-      --arg sync_message "$sync_message" \
-      --arg sync_output "$sync_output" \
-      '{ok:true,message:$message,recipient:$recipient,sender:$sender,smtp_host:$smtp_host,copied_files:$copied_files,verify:$verify,test:{status:$test_status,output:$test_output},sync:{status:$sync_status,message:$sync_message,output:$sync_output},remote:$remote}'
+      --argjson remote "$updated_remote_json" \
+      '{ok:true,message:$message,recipient:$recipient,sender:$sender,subject:$subject,smtp_host:$smtp_host,test:{status:$test_status,output:$test_output},remote:$remote}'
     ;;
 
   settings-remote-sync)

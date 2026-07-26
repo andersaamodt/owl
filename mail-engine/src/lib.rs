@@ -34,7 +34,6 @@ pub mod ruleset {
 }
 
 pub mod util {
-    pub mod dkim;
     pub mod idna;
     pub mod logging;
     pub mod regex;

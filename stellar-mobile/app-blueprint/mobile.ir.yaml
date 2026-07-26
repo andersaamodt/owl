@@ -116,7 +116,8 @@
             {"id": "remote.deploy", "type": "Button", "title": "Deploy Remote Server", "action": "deploy_remote_server"},
             {"id": "remote.verify", "type": "Button", "title": "Verify Remote Setup", "action": "verify_remote_server"},
             {"id": "remote.tls", "type": "Button", "title": "Set Up Remote TLS", "action": "setup_remote_tls"},
-            {"id": "remote.test", "type": "Button", "title": "Send Test Email", "action": "send_remote_test"},
+            {"id": "remote.outboundTestRecipient", "type": "Input", "title": "External Test Address", "action": "save_remote_test_recipient"},
+            {"id": "remote.test", "type": "Button", "title": "Test Outbound Sending", "action": "send_remote_test"},
             {"id": "remote.sync", "type": "Button", "title": "Check Remote Mail", "action": "sync_remote_mail"}
           ]
         }

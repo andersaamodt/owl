@@ -118,7 +118,7 @@ case "$action" in
     run_backend_operation settings-remote-verify "$root" "$(payload_value '.host')" "$(payload_value '.ssh_key_path')" "$(payload_value '.ssh_key_password')" "$(payload_value '.ssh_port')"
     ;;
   settings_remote_send_test)
-    run_backend_operation settings-remote-send-test "$root" "$(payload_value '.host')" "$(payload_value '.ssh_key_path')" "$(payload_value '.ssh_key_password')" "$(payload_value '.ssh_port')"
+    run_backend_operation settings-remote-send-test "$root" "$(payload_value '.host')" "$(payload_value '.ssh_key_path')" "$(payload_value '.ssh_key_password')" "$(payload_value '.ssh_port')" "$(payload_value '.recipient')"
     ;;
   settings_remote_sync)
     run_backend_operation settings-remote-sync "$root" "$(payload_value '.host')" "$(payload_value '.ssh_key_path')" "$(payload_value '.ssh_key_password')" "$(payload_value '.ssh_port')"

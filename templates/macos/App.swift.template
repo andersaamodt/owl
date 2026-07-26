@@ -472,6 +472,7 @@ private struct RemoteSettings: Decodable, Sendable {
   var port: String = ""
   var ssh_key_has_password: String = "0"
   var ssh_key_save_choice: String = "0"
+  var outbound_test_recipient: String = ""
   var last_deploy_at: String = ""
   var last_deploy_status: String = ""
   var last_deploy_message: String = ""
@@ -491,7 +492,7 @@ private struct RemoteSettings: Decodable, Sendable {
   }
 
   private enum CodingKeys: String, CodingKey {
-    case host, key_path, port, ssh_key_has_password, ssh_key_save_choice
+    case host, key_path, port, ssh_key_has_password, ssh_key_save_choice, outbound_test_recipient
     case last_deploy_at, last_deploy_status, last_deploy_message
     case last_verify_at, last_verify_status, last_verify_message
     case last_test_at, last_test_status, last_test_message
@@ -507,6 +508,7 @@ private struct RemoteSettings: Decodable, Sendable {
     port = try values.decodeIfPresent(String.self, forKey: .port) ?? ""
     ssh_key_has_password = try values.decodeIfPresent(String.self, forKey: .ssh_key_has_password) ?? "0"
     ssh_key_save_choice = try values.decodeIfPresent(String.self, forKey: .ssh_key_save_choice) ?? "0"
+    outbound_test_recipient = try values.decodeIfPresent(String.self, forKey: .outbound_test_recipient) ?? ""
     last_deploy_at = try values.decodeIfPresent(String.self, forKey: .last_deploy_at) ?? ""
     last_deploy_status = try values.decodeIfPresent(String.self, forKey: .last_deploy_status) ?? "idle"
     last_deploy_message = try values.decodeIfPresent(String.self, forKey: .last_deploy_message) ?? ""
@@ -650,6 +652,10 @@ private struct TLSWizardChecks: Decodable, Sendable {
   var smtp_a_ok: Bool = false
   var smtp_cname_ok: Bool = false
   var mx_ok: Bool = false
+  var ptr_ok: Bool = false
+  var spf_ok: Bool = false
+  var dkim_ok: Bool = false
+  var dmarc_ok: Bool = false
 }
 
 private struct TLSDNSRecord: Decodable, Identifiable, Sendable {
@@ -1361,6 +1367,7 @@ private final class StellarSession: ObservableObject {
   @Published var remoteKeyHasPassword: Bool = false
   @Published var remoteKeySavePassword: Bool = false
   @Published var remoteKeyPasswordDraft: String = ""
+  @Published var outboundTestRecipientDraft: String = ""
   @Published var remotePasswordVisible: Bool = false
   @Published var tlsWizardIPMode: String = "stable"
   @Published var tlsWizardStatus: TLSWizardStatus?
@@ -1802,6 +1809,7 @@ private final class StellarSession: ObservableObject {
     remoteHostDraft = next.settings.remote.host
     remoteKeyPathDraft = next.settings.remote.key_path
     remotePortDraft = next.settings.remote.port
+    outboundTestRecipientDraft = next.settings.remote.outbound_test_recipient
     remoteKeyHasPassword = next.settings.remote_auth.keyHasPassword
     remoteKeySavePassword = next.settings.remote_auth.savePassword
   }
@@ -2875,6 +2883,7 @@ private final class StellarSession: ObservableObject {
       remoteHostDraft = remote.host
       remoteKeyPathDraft = remote.key_path
       remotePortDraft = remote.port
+      outboundTestRecipientDraft = remote.outbound_test_recipient
     }
     if let auth = result.remote_auth {
       snapshot.settings.remote_auth = auth
@@ -2948,10 +2957,11 @@ private final class StellarSession: ObservableObject {
 
   func sendRemoteTestEmail() {
     runRemoteWorkflowAction(
-      title: "Sending remote test email",
+      title: "Testing outbound sending",
       action: "settings-remote-send-test",
-      fallbackStatus: "Remote test email finished",
-      refreshAfter: true
+      actionArgs: remoteWorkflowArgs() + [outboundTestRecipientDraft.trimmingCharacters(in: .whitespacesAndNewlines)],
+      fallbackStatus: "Outbound test finished",
+      refreshAfter: false
     )
   }
 
@@ -6833,6 +6843,18 @@ private struct TLSSetupWalkthroughView: View {
     if !status.checks.mx_ok {
       missing.append("MX @ priority 10 -> \(smtpHost)")
     }
+    if status.suggested_records.contains(where: { $0.type.uppercased() == "PTR" }) && !status.checks.ptr_ok {
+      missing.append("reverse DNS/PTR at the VPS provider")
+    }
+    if status.suggested_records.contains(where: { $0.type.uppercased() == "TXT" && $0.value.hasPrefix("v=spf1") }) && !status.checks.spf_ok {
+      missing.append("SPF TXT for \(domainText)")
+    }
+    if status.suggested_records.contains(where: { $0.type.uppercased() == "TXT" && $0.value.hasPrefix("v=DKIM1") }) && !status.checks.dkim_ok {
+      missing.append("DKIM TXT for \(domainText)")
+    }
+    if status.suggested_records.contains(where: { $0.type.uppercased() == "TXT" && $0.value.hasPrefix("v=DMARC1") }) && !status.checks.dmarc_ok {
+      missing.append("DMARC TXT for \(domainText)")
+    }
     return missing
   }
 
@@ -6879,7 +6901,7 @@ private struct TLSSetupWalkthroughView: View {
         RemoteSetupStep(
           number: 2,
           title: "Configure DNS Records",
-          detail: session.tlsWizardDNSReady ? "Required DNS records were detected." : "Add the mail host record first, then add MX with a hostname target, not an IP.",
+          detail: session.tlsWizardDNSReady ? "Mail routing DNS is ready. Add the shown TXT records for trustworthy outbound delivery." : "Add the mail host record first, then add MX with a hostname target, not an IP.",
           state: dnsState
         ) {
           VStack(alignment: .leading, spacing: 8) {
@@ -7038,6 +7060,11 @@ private struct TLSDNSRecordRow: View {
           .font(.caption2)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
+      } else if record.type.uppercased() == "PTR" {
+        Text("Set reverse DNS in the VPS provider's control panel, not in the domain's normal DNS records.")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
       }
     }
   }
@@ -7181,17 +7208,20 @@ private struct RemoteServerWalkthroughView: View {
 
       RemoteSetupStep(
         number: 4,
-        title: "Test And Sync",
-        detail: session.snapshot.settings.remote.last_test_message.isEmpty ? "Send a test email and pull remote mail into local Stellar." : session.snapshot.settings.remote.last_test_message,
+        title: "Test Sending And Check Mail",
+        detail: session.snapshot.settings.remote.last_test_message.isEmpty ? "Send an authenticated test to an external mailbox, or pull newly received mail into Stellar." : session.snapshot.settings.remote.last_test_message,
         state: testState
       ) {
         VStack(alignment: .leading, spacing: 8) {
+          TextField("External test address (for example, you@gmail.com)", text: $session.outboundTestRecipientDraft)
+            .textFieldStyle(.roundedBorder)
+            .frame(maxWidth: 360)
           HStack(spacing: 8) {
             Button { session.sendRemoteTestEmail() } label: {
-              Label("Send Test Email", systemImage: "paperplane")
+              Label("Test Outbound Sending", systemImage: "paperplane")
             }
             .fixedSize()
-            .disabled(!session.remoteReadyForDeploy || session.isBusy)
+            .disabled(!session.remoteReadyForDeploy || session.outboundTestRecipientDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || session.isBusy)
             Button { session.syncRemote() } label: {
               Label("Check Remote Mail", systemImage: "arrow.triangle.2.circlepath")
             }

@@ -27,20 +27,10 @@ use crate::{
         message::{HeadersCache, MessageSidecar, OutboundStatus},
     },
     util::{
-        dkim::{self, DkimSigner},
         logging::{LogLevel, Logger},
         time::parse_interval,
     },
 };
-
-const SIGNED_HEADERS: &[&str] = &[
-    "from",
-    "to",
-    "subject",
-    "date",
-    "mime-version",
-    "content-type",
-];
 
 pub struct OutboxPipeline {
     layout: MailLayout,
@@ -81,10 +71,6 @@ impl OutboxPipeline {
 
     pub fn queue_draft(&self, draft_path: &Path) -> Result<PathBuf> {
         let draft = Draft::from_file(draft_path)?;
-        let material =
-            dkim::ensure_ed25519_keypair(&self.layout.dkim_dir(), &self.env.dkim_selector)?;
-        let signer = DkimSigner::from_material(&material)?;
-
         create_dir_all(&self.layout.outbox())?;
 
         let text_body = markdown_to_text(&draft.body);
@@ -113,15 +99,10 @@ impl OutboxPipeline {
         let multipart = MultiPart::alternative_plain_html(text_body.clone(), html_body.clone());
         let message = builder.multipart(multipart)?;
 
-        let formatted = message.formatted();
-        let (headers_raw, body_bytes) = split_headers_body(&formatted)?;
-        let dkim_value = signer.sign(&draft.domain, &headers_raw, body_bytes, SIGNED_HEADERS)?;
-
-        let mut final_message = Vec::new();
-        final_message.extend_from_slice(format!("DKIM-Signature: {dkim_value}\r\n").as_bytes());
-        final_message.extend_from_slice(headers_raw.as_bytes());
-        final_message.extend_from_slice(b"\r\n\r\n");
-        final_message.extend_from_slice(body_bytes);
+        // DKIM belongs to the submission server, not to an individual device.
+        // This keeps one authoritative key for every client using the server.
+        let final_message = message.formatted();
+        let (headers_raw, _) = split_headers_body(&final_message)?;
 
         let hash = Sha256::digest(&final_message);
         let hash_hex = hex::encode(hash);
@@ -314,12 +295,24 @@ fn split_headers_body(formatted: &[u8]) -> Result<(String, &[u8])> {
 }
 
 fn header_value(headers_raw: &str, name: &str) -> Option<String> {
-    let header = dkim::extract_header(headers_raw, name)?;
-    let mut parts = header.trim_end_matches("\r\n").splitn(2, ':');
-    let _ = parts.next()?;
-    let mut value = parts.next()?.trim().to_string();
-    value = value.replace("\r\n ", " ").replace("\r\n\t", " ");
-    Some(value)
+    let mut value = None::<String>;
+    for line in headers_raw.split("\r\n") {
+        if line.starts_with(' ') || line.starts_with('\t') {
+            if let Some(existing) = value.as_mut() {
+                existing.push(' ');
+                existing.push_str(line.trim());
+            }
+            continue;
+        }
+        if value.is_some() {
+            break;
+        }
+        let (header_name, header_value) = line.split_once(':')?;
+        if header_name.eq_ignore_ascii_case(name) {
+            value = Some(header_value.trim().to_string());
+        }
+    }
+    value
 }
 
 fn markdown_to_html(markdown: &str) -> String {
@@ -657,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn queue_draft_generates_signed_message() {
+    fn queue_draft_generates_message_for_server_submission() {
         let (_dir, layout, env, logger) = test_env();
         let pipeline = OutboxPipeline::new(layout.clone(), env, logger);
         let draft_ulid = crate::util::ulid::generate();
@@ -671,7 +664,8 @@ mod tests {
         let message_path = pipeline.queue_draft(&draft_path).unwrap();
         assert!(message_path.exists());
         let message = fs::read_to_string(&message_path).unwrap();
-        assert!(message.starts_with("DKIM-Signature:"));
+        assert!(message.starts_with("From:"));
+        assert!(!message.to_ascii_lowercase().contains("dkim-signature:"));
         let sidecar_path = layout.outbox().join(outbox_sidecar_filename(&draft_ulid));
         let sidecar: MessageSidecar =
             serde_yaml::from_str(&fs::read_to_string(sidecar_path).unwrap()).unwrap();

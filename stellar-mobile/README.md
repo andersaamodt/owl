@@ -9,7 +9,8 @@ for local builds or release artifacts.
 
 The generated mobile apps include a Remote Setup walkthrough and backend bridge
 client for saving the SSH target/auth details and running the same deploy,
-verify, remote TLS, test email, and remote mail sync actions from mobile.
+verify, remote TLS, authenticated outbound test, and remote mail sync actions
+from mobile.
 The bridge endpoint can be backed by [scripts/stellar-mobile-backend-bridge.sh](../scripts/stellar-mobile-backend-bridge.sh),
 which dispatches the same allowlisted Stellar backend actions used by the
 desktop app. The bridge host uses Stellar's bundled mail engine by default;

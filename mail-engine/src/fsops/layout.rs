@@ -65,26 +65,10 @@ impl MailLayout {
         for list in ["accepted", "spam", "banned"] {
             self.ensure_list(list)?;
         }
-        for leaf in ["drafts", "outbox", "sent", "logs", "dkim"] {
+        for leaf in ["drafts", "outbox", "sent", "logs"] {
             create_dir_all(&self.root.join(leaf))?;
         }
         Ok(())
-    }
-
-    pub fn dkim_dir(&self) -> PathBuf {
-        self.root.join("dkim")
-    }
-
-    pub fn dkim_private_key(&self, selector: &str) -> PathBuf {
-        self.dkim_dir().join(format!("{selector}.private"))
-    }
-
-    pub fn dkim_public_key(&self, selector: &str) -> PathBuf {
-        self.dkim_dir().join(format!("{selector}.public"))
-    }
-
-    pub fn dkim_dns_record(&self, selector: &str) -> PathBuf {
-        self.dkim_dir().join(format!("{selector}.dns"))
     }
 
     fn ensure_list(&self, list: &str) -> Result<()> {
@@ -136,19 +120,6 @@ mod tests {
         assert_eq!(layout.sent(), Path::new("/tmp/mail/sent"));
         assert_eq!(layout.logs_dir(), Path::new("/tmp/mail/logs"));
         assert_eq!(layout.log_file(), Path::new("/tmp/mail/logs/owl.log"));
-        assert_eq!(layout.dkim_dir(), Path::new("/tmp/mail/dkim"));
-        assert_eq!(
-            layout.dkim_private_key("mail"),
-            Path::new("/tmp/mail/dkim/mail.private")
-        );
-        assert_eq!(
-            layout.dkim_public_key("mail"),
-            Path::new("/tmp/mail/dkim/mail.public")
-        );
-        assert_eq!(
-            layout.dkim_dns_record("mail"),
-            Path::new("/tmp/mail/dkim/mail.dns")
-        );
         assert_eq!(layout.root(), Path::new("/tmp/mail"));
     }
 
@@ -166,7 +137,6 @@ mod tests {
             "outbox",
             "sent",
             "logs",
-            "dkim",
         ] {
             assert!(dir.path().join(leaf).exists(), "{leaf} missing");
         }
@@ -261,30 +231,6 @@ mod tests {
     }
 
     #[test]
-    fn spec_dkim_directory_structure() {
-        // Per spec: DKIM keys stored in dkim/ directory
-        let dir = tempfile::tempdir().unwrap();
-        let layout = MailLayout::new(dir.path());
-        layout.ensure().unwrap();
-
-        assert!(dir.path().join("dkim").is_dir());
-
-        // Check path generation for selector "mail"
-        assert_eq!(
-            layout.dkim_private_key("mail"),
-            dir.path().join("dkim/mail.private")
-        );
-        assert_eq!(
-            layout.dkim_public_key("mail"),
-            dir.path().join("dkim/mail.public")
-        );
-        assert_eq!(
-            layout.dkim_dns_record("mail"),
-            dir.path().join("dkim/mail.dns")
-        );
-    }
-
-    #[test]
     fn ensure_idempotent() {
         // Running ensure() multiple times should be safe
         let dir = tempfile::tempdir().unwrap();
@@ -363,7 +309,6 @@ mod tests {
         assert!(layout.outbox().is_dir());
         assert!(layout.sent().is_dir());
         assert!(layout.logs_dir().is_dir());
-        assert!(layout.dkim_dir().is_dir());
     }
 
     #[test]
@@ -398,24 +343,6 @@ mod tests {
         // Custom content should be preserved
         let content = fs::read_to_string(&rules_path).unwrap();
         assert_eq!(content, "custom rule\n");
-    }
-
-    #[test]
-    fn dkim_selector_with_different_names() {
-        let layout = MailLayout::new("/tmp/mail");
-
-        assert_eq!(
-            layout.dkim_private_key("mail"),
-            PathBuf::from("/tmp/mail/dkim/mail.private")
-        );
-        assert_eq!(
-            layout.dkim_private_key("mail2"),
-            PathBuf::from("/tmp/mail/dkim/mail2.private")
-        );
-        assert_eq!(
-            layout.dkim_dns_record("custom"),
-            PathBuf::from("/tmp/mail/dkim/custom.dns")
-        );
     }
 
     #[test]

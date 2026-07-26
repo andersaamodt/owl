@@ -3,7 +3,8 @@
 This directory is the server component shipped with Stellar. It contains:
 
 - The Rust `owl` and `owl-daemon` binaries used for file-first mail processing.
-- The Postfix receiving bridge and server deployment adapter.
+- The Postfix receiving bridge, authenticated submission service, server-side
+  DKIM signer, and server deployment adapter.
 - Service helpers used on the installed server.
 
 `owl` remains the internal binary and crate name to preserve the tested storage
@@ -27,6 +28,12 @@ Receiving-address configuration belongs to the user's mail root at
 `../scripts/stellar-mail-backend.sh`, not by editing Postfix files manually.
 TLS setup keeps Certbot state root-owned and installs a twice-daily renewal
 timer that safely releases port 80 for the standalone challenge.
+
+The remote installer configures public receiving on port 25 and
+TLS-authenticated client submission on port 587. It uses Cyrus SASL for one
+single-user credential and OpenDKIM for one authoritative server key. Private
+credentials and keys remain outside the repository; only the public DNS record
+values are surfaced to the setup UI.
 
 The imported engine was originally developed as Owl and remains available under
 the permissive terms in `LICENSE`.

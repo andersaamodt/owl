@@ -5,8 +5,6 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct EnvConfig {
-    pub dmarc_policy: String,
-    pub dkim_selector: String,
     pub letsencrypt_method: String,
     pub keep_plus_tags: bool,
     pub max_size_quarantine: String,
@@ -31,8 +29,6 @@ pub struct EnvConfig {
 impl Default for EnvConfig {
     fn default() -> Self {
         Self {
-            dmarc_policy: "none".into(),
-            dkim_selector: "mail".into(),
             letsencrypt_method: "http".into(),
             keep_plus_tags: false,
             max_size_quarantine: "25M".into(),
@@ -71,14 +67,6 @@ impl EnvConfig {
             map.insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
         }
         Ok(Self {
-            dmarc_policy: map
-                .get("dmarc_policy")
-                .cloned()
-                .unwrap_or_else(|| Self::default().dmarc_policy),
-            dkim_selector: map
-                .get("dkim_selector")
-                .cloned()
-                .unwrap_or_else(|| Self::default().dkim_selector),
             letsencrypt_method: map
                 .get("letsencrypt_method")
                 .cloned()
@@ -138,8 +126,6 @@ impl EnvConfig {
     pub fn to_env_string(&self) -> String {
         format!(
             concat!(
-                "dmarc_policy={}\n",
-                "dkim_selector={}\n",
                 "letsencrypt_method={}\n",
                 "keep_plus_tags={}\n",
                 "max_size_quarantine={}\n",
@@ -153,8 +139,6 @@ impl EnvConfig {
                 "smtp_port={}\n",
                 "smtp_starttls={}\n"
             ),
-            self.dmarc_policy,
-            self.dkim_selector,
             self.letsencrypt_method,
             bool_to_env(self.keep_plus_tags),
             self.max_size_quarantine,
@@ -212,11 +196,9 @@ mod tests {
 
     #[test]
     fn parse_all_fields() {
-        let cfg: EnvConfig = "dmarc_policy=quarantine\ndkim_selector=owl\nletsencrypt_method=dns\nmax_size_quarantine=10M\nmax_size_approved_default=20M\ncontacts_dir=/tmp/contacts\nlogging=verbose_full\nrender_mode=moderate\nload_external_per_message=false\nretry_backoff=1m\nsmtp_host=smtp.example.org\nsmtp_port=2525\nsmtp_username=alice\nsmtp_password=secret\nsmtp_starttls=false\n"
+        let cfg: EnvConfig = "letsencrypt_method=dns\nmax_size_quarantine=10M\nmax_size_approved_default=20M\ncontacts_dir=/tmp/contacts\nlogging=verbose_full\nrender_mode=moderate\nload_external_per_message=false\nretry_backoff=1m\nsmtp_host=smtp.example.org\nsmtp_port=2525\nsmtp_username=alice\nsmtp_password=secret\nsmtp_starttls=false\n"
             .parse()
             .unwrap();
-        assert_eq!(cfg.dmarc_policy, "quarantine");
-        assert_eq!(cfg.dkim_selector, "owl");
         assert_eq!(cfg.letsencrypt_method, "dns");
         assert_eq!(cfg.max_size_quarantine, "10M");
         assert_eq!(cfg.max_size_approved_default, "20M");
@@ -415,19 +397,6 @@ mod tests {
     }
 
     #[test]
-    fn dmarc_policy_spec_values() {
-        // Common DMARC policy values
-        let none: EnvConfig = "dmarc_policy=none\n".parse().unwrap();
-        assert_eq!(none.dmarc_policy, "none");
-
-        let quarantine: EnvConfig = "dmarc_policy=quarantine\n".parse().unwrap();
-        assert_eq!(quarantine.dmarc_policy, "quarantine");
-
-        let reject: EnvConfig = "dmarc_policy=reject\n".parse().unwrap();
-        assert_eq!(reject.dmarc_policy, "reject");
-    }
-
-    #[test]
     fn case_insensitive_keys() {
         // Keys should be lowercased
         let cfg: EnvConfig = "LOGGING=off\nLogging=verbose_full\n".parse().unwrap();
@@ -444,8 +413,6 @@ mod tests {
     #[test]
     fn empty_config_uses_defaults() {
         let cfg: EnvConfig = "".parse().unwrap();
-        assert_eq!(cfg.dmarc_policy, "none");
-        assert_eq!(cfg.dkim_selector, "mail");
         assert_eq!(cfg.max_size_quarantine, "25M");
         assert_eq!(cfg.logging, "minimal");
         assert!(!cfg.keep_plus_tags);
@@ -455,7 +422,6 @@ mod tests {
     fn config_with_only_comments() {
         let cfg: EnvConfig = "# comment 1\n# comment 2\n".parse().unwrap();
         // Should match defaults except for smtp_host which is Some in default but not parsed
-        assert_eq!(cfg.dmarc_policy, EnvConfig::default().dmarc_policy);
         assert_eq!(cfg.logging, EnvConfig::default().logging);
         assert_eq!(cfg.keep_plus_tags, EnvConfig::default().keep_plus_tags);
         // smtp_host is None when parsed from empty config
@@ -557,6 +523,6 @@ mod tests {
         let cfg = EnvConfig::default();
         let debug = format!("{:?}", cfg);
         assert!(debug.contains("EnvConfig"));
-        assert!(debug.contains("dmarc_policy"));
+        assert!(debug.contains("smtp_host"));
     }
 }

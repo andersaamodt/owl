@@ -80,12 +80,21 @@ For a single-user server:
 2. Create receiving addresses such as `me`, `work`, or `receipts`.
 3. Optionally add forwarding destinations.
 4. Configure the SSH server and deploy it.
-5. Complete the displayed DNS and TLS checks.
+5. Complete the displayed DNS, reverse-DNS, and TLS checks.
+6. Send an authenticated test to an external mailbox.
 
 Every enabled address delivers to the same Stellar inbox. `postmaster` is
 always present, catch-all receiving is off by default, and unknown addresses
 are rejected. Address changes can be applied to an already-deployed server
 without rebuilding it.
+
+Outbound mail uses TLS-authenticated submission on port 587. Stellar generates
+one stable server credential, stores it outside the repository with owner-only
+permissions, and configures the client automatically. The server—not each
+device—owns the DKIM key and signs every outbound message. The setup screen
+shows the exact SPF, DKIM, and DMARC TXT records to publish, plus the PTR value
+to set in the VPS provider's reverse-DNS control. The outbound test waits for
+the destination server's accept, defer, or bounce result.
 
 `doctor` runs the bundled engine's read-only `health` action. An explicit
 `STELLAR_MAIL_BACKEND` remains available for development overrides, but Stellar

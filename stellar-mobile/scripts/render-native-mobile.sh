@@ -200,6 +200,7 @@ public final class MainActivity extends Activity {
     private EditText remoteKey;
     private EditText remotePort;
     private EditText remotePassword;
+    private EditText outboundTestRecipient;
     private CheckBox remoteHasPassword;
     private CheckBox remoteSavePassword;
 
@@ -320,9 +321,11 @@ public final class MainActivity extends Activity {
 
         addWorkflowButton(root, "Deploy Remote Server", "settings-remote-deploy", "Deploy uses the saved SSH target to install Stellar, configure the receiver, and enable startup.");
         addWorkflowButton(root, "Verify Remote Setup", "settings-remote-verify", "Verification checks Stellar binaries, daemon health, SMTP reachability, DNS, and mail folders on the saved target.");
-        root.addView(bodyText("TLS DNS checklist: add the mail host record first (A/AAAA for a stable IP, or CNAME/A for DDNS), then add MX with Host/Name @, Priority 10, and Target/Value set to the mail host hostname, not an IP. Certbot and supporting tools are installed during setup when needed."));
+        root.addView(bodyText("Mail DNS checklist: add the mail host record first, add MX with Host/Name @ and Priority 10, then deploy and add the SPF, DKIM, and DMARC TXT records Stellar shows. Certbot and supporting tools install automatically."));
         addWorkflowButton(root, "Set Up Remote TLS", "settings-setup-ssl", "Remote TLS setup uses Stellar's SSL wizard flow after DNS points at the active remote mail server.");
-        addWorkflowButton(root, "Send Test Email", "settings-remote-send-test", "The test email step confirms the public route reaches the remote Stellar receiver.");
+        outboundTestRecipient = field("External test address", "remote.outboundTestRecipient");
+        root.addView(outboundTestRecipient, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        addWorkflowButton(root, "Test Outbound Sending", "settings-remote-send-test", "Stellar submits with TLS authentication and reports whether the destination accepted or rejected the message.");
         addWorkflowButton(root, "Check Remote Mail", "settings-remote-sync", "Remote sync pulls server mail folders back into local Stellar without deleting remote mail.");
 
         remoteStatus = bodyText(remoteSummary());
@@ -377,6 +380,14 @@ public final class MainActivity extends Activity {
             setRemoteStatus("Save the backend bridge, SSH target, SSH key, and authentication before running " + title + ".");
             return;
         }
+        if ("settings-remote-send-test".equals(action)) {
+            String recipient = outboundTestRecipient.getText().toString().trim();
+            if (!recipient.contains("@")) {
+                setRemoteStatus("Enter a valid external address before testing outbound sending.");
+                return;
+            }
+            prefs.edit().putString("remote.outboundTestRecipient", recipient).apply();
+        }
         setRemoteStatus(title + ": starting...");
         String bridge = remoteBridgeUrl.getText().toString().trim();
         String[] targetArgs = remoteTargetArgs();
@@ -420,6 +431,9 @@ public final class MainActivity extends Activity {
         String port = normalizedPort();
         if ("settings-setup-ssl".equals(action)) {
             return new String[] {"remote", host, key, password, port};
+        }
+        if ("settings-remote-send-test".equals(action)) {
+            return new String[] {host, key, password, port, outboundTestRecipient.getText().toString().trim()};
         }
         return new String[] {host, key, password, port};
     }
@@ -604,6 +618,7 @@ $ios_items
     @AppStorage("remote.keyHasPassword") private var remoteKeyHasPassword = false
     @AppStorage("remote.savePassword") private var remoteSavePassword = false
     @AppStorage("remote.password") private var remotePassword = ""
+    @AppStorage("remote.outboundTestRecipient") private var outboundTestRecipient = ""
 
     var body: some View {
         NavigationStack {
@@ -721,14 +736,17 @@ $ios_items
 
                 RemoteSetupStepView(
                     number: 6,
-                    title: "Test And Sync",
-                    detail: "Send a test email, then check remote mail.",
+                    title: "Test Sending And Check Mail",
+                    detail: "Send an authenticated test to an external mailbox, or pull newly received mail into Stellar.",
                     complete: false
                 ) {
-                    Button("Send Test Email") {
-                        Task { await runRemoteWorkflowAction(title: "Send Test Email", action: "settings-remote-send-test", fallbackStatus: "Remote test email finished") }
+                    TextField("External test address", text: \$outboundTestRecipient)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.emailAddress)
+                    Button("Test Outbound Sending") {
+                        Task { await runRemoteWorkflowAction(title: "Test Outbound Sending", action: "settings-remote-send-test", fallbackStatus: "Outbound test finished") }
                     }
-                    .disabled(!remoteReadyForActions)
+                    .disabled(!remoteReadyForActions || outboundTestRecipient.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     Button("Check Remote Mail") {
                         Task { await runRemoteWorkflowAction(title: "Check Remote Mail", action: "settings-remote-sync", fallbackStatus: "Remote sync finished") }
                     }
@@ -839,6 +857,9 @@ $ios_items
         ]
         if action == "settings-setup-ssl" {
             return ["remote"] + args
+        }
+        if action == "settings-remote-send-test" {
+            return args + [outboundTestRecipient.trimmingCharacters(in: .whitespacesAndNewlines)]
         }
         return args
     }

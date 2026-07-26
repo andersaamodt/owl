@@ -517,8 +517,8 @@ mail_backend_actions_are_hard_allowlisted_and_passthrough() {
   printf '%s\n' "$output" | jq -e '.ok == true and .action == "settings-remote-set-auth" and .argc == 6' >/dev/null
   output=$(backend_with_mail "$fake" settings-remote-deploy "$root" user@example.org "$tmpdir/id_ed25519" "secret" 2222)
   printf '%s\n' "$output" | jq -e '.ok == true and .action == "settings-remote-deploy" and .argc == 4' >/dev/null
-  output=$(backend_with_mail "$fake" settings-remote-send-test "$root" user@example.org "$tmpdir/id_ed25519" "secret" 2222)
-  printf '%s\n' "$output" | jq -e '.ok == true and .action == "settings-remote-send-test" and .argc == 4' >/dev/null
+  output=$(backend_with_mail "$fake" settings-remote-send-test "$root" user@example.org "$tmpdir/id_ed25519" "secret" 2222 recipient@example.net)
+  printf '%s\n' "$output" | jq -e '.ok == true and .action == "settings-remote-send-test" and .argc == 5' >/dev/null
   if backend_with_mail "$fake" arbitrary-shell "$root" >"$tmpdir/arbitrary.out" 2>"$tmpdir/arbitrary.err"; then
     return 1
   fi

@@ -46,8 +46,8 @@ grep -F "Save Backend Bridge" "$mobile_generated_root/android/app/src/main/java/
 grep -F "Save Remote Target" "$mobile_generated_root/android/app/src/main/java/app/wizardry/generated/stellar/MainActivity.java" >/dev/null
 grep -F "Deploy Remote Server" "$mobile_generated_root/android/app/src/main/java/app/wizardry/generated/stellar/MainActivity.java" >/dev/null
 grep -F "Set Up Remote TLS" "$mobile_generated_root/android/app/src/main/java/app/wizardry/generated/stellar/MainActivity.java" >/dev/null
-grep -F "TLS DNS checklist" "$mobile_generated_root/android/app/src/main/java/app/wizardry/generated/stellar/MainActivity.java" >/dev/null
-grep -F "Target/Value set to the mail host hostname, not an IP" "$mobile_generated_root/android/app/src/main/java/app/wizardry/generated/stellar/MainActivity.java" >/dev/null
+grep -F "SPF, DKIM, and DMARC TXT records Stellar shows" "$mobile_generated_root/android/app/src/main/java/app/wizardry/generated/stellar/MainActivity.java" >/dev/null
+grep -F 'addWorkflowButton(root, "Test Outbound Sending"' "$mobile_generated_root/android/app/src/main/java/app/wizardry/generated/stellar/MainActivity.java" >/dev/null
 grep -F "HttpURLConnection" "$mobile_generated_root/android/app/src/main/java/app/wizardry/generated/stellar/MainActivity.java" >/dev/null
 grep -F "settings-remote-deploy" "$mobile_generated_root/android/app/src/main/java/app/wizardry/generated/stellar/MainActivity.java" >/dev/null
 grep -F "settings-remote-set-target" "$mobile_generated_root/android/app/src/main/java/app/wizardry/generated/stellar/MainActivity.java" >/dev/null
@@ -62,7 +62,8 @@ grep -F 'Button("Save Backend Bridge")' "$mobile_generated_root/ios/Host/Content
 grep -F 'Button("Deploy Remote Server")' "$mobile_generated_root/ios/Host/ContentView.swift" >/dev/null
 grep -F 'title: "Remote TLS"' "$mobile_generated_root/ios/Host/ContentView.swift" >/dev/null
 grep -F 'MX targets must be hostnames, not IP addresses.' "$mobile_generated_root/ios/Host/ContentView.swift" >/dev/null
-grep -F 'title: "Test And Sync"' "$mobile_generated_root/ios/Host/ContentView.swift" >/dev/null
+grep -F 'title: "Test Sending And Check Mail"' "$mobile_generated_root/ios/Host/ContentView.swift" >/dev/null
+grep -F 'Button("Test Outbound Sending")' "$mobile_generated_root/ios/Host/ContentView.swift" >/dev/null
 grep -F 'Button("Set Up Remote TLS")' "$mobile_generated_root/ios/Host/ContentView.swift" >/dev/null
 grep -F "URLSession.shared.data" "$mobile_generated_root/ios/Host/ContentView.swift" >/dev/null
 grep -F 'action: "settings-remote-deploy"' "$mobile_generated_root/ios/Host/ContentView.swift" >/dev/null

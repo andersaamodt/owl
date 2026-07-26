@@ -37,7 +37,6 @@ alice@example.org\n\
 
     let env_contents = std::fs::read_to_string(&env_path).unwrap();
     assert!(env_contents.contains("logging="));
-    assert!(env_contents.contains("dkim_selector="));
     assert!(env_contents.contains("retry_backoff="));
 
     let rules_path = temp.path().join("accepted/.rules");

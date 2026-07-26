@@ -25,10 +25,7 @@ use crate::{
         smtp_in::InboundPipeline,
     },
     ruleset::loader::{LoadedRules, RulesetLoader},
-    util::{
-        dkim,
-        logging::{self, LogLevel, Logger},
-    },
+    util::logging::{self, LogLevel, Logger},
 };
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -51,7 +48,7 @@ pub struct OwlCli {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
-    #[command(about = "Bootstrap mail storage, DKIM keys, and system hooks")]
+    #[command(about = "Bootstrap mail storage and system hooks")]
     Install,
     #[command(about = "Re-apply provisioning hooks and ensure layout exists")]
     Update,
@@ -183,17 +180,6 @@ fn install(env_path: &Path, env: &EnvConfig, logger: &Logger) -> Result<String> 
         LogLevel::Minimal,
         "install.ensure",
         Some(&format!("root={}", root.display())),
-    )?;
-    let dkim_material = dkim::ensure_ed25519_keypair(&layout.dkim_dir(), &env.dkim_selector)?;
-    logger.log(
-        LogLevel::Minimal,
-        "install.dkim.ready",
-        Some(&format!(
-            "selector={} public_key={} dns={}",
-            env.dkim_selector,
-            dkim_material.public_key,
-            dkim_material.dns_record_path.display()
-        )),
     )?;
     ops_install::provision(&layout, env, logger)?;
     if !env_path.exists() {
@@ -1229,13 +1215,6 @@ fn setup_env(
         "Max size for approved mail (e.g. 50M)",
         Some(&defaults.max_size_approved_default),
     )?;
-    let dkim_selector = prompt(
-        input,
-        output,
-        "DKIM selector",
-        Some(&defaults.dkim_selector),
-    )?;
-    let dmarc_policy = prompt(input, output, "DMARC policy", Some(&defaults.dmarc_policy))?;
     let retry_backoff = prompt(
         input,
         output,
@@ -1248,8 +1227,6 @@ fn setup_env(
     upsert_env_setting(env_path, "logging", &logging)?;
     upsert_env_setting(env_path, "max_size_quarantine", &max_quarantine)?;
     upsert_env_setting(env_path, "max_size_approved_default", &max_approved)?;
-    upsert_env_setting(env_path, "dkim_selector", &dkim_selector)?;
-    upsert_env_setting(env_path, "dmarc_policy", &dmarc_policy)?;
     upsert_env_setting(env_path, "retry_backoff", &retry_backoff)?;
     Ok(())
 }
@@ -2149,18 +2126,12 @@ mod tests {
         let output = with_fake_ops_env(|| run(cli.clone(), env.clone()).unwrap());
         assert!(output.contains("installed"));
         assert!(dir.path().join("quarantine").exists());
-        let dkim_dir = dir.path().join("dkim");
-        assert!(dkim_dir.exists());
-        let selector = env.dkim_selector.clone();
-        assert!(dkim_dir.join(format!("{selector}.private")).exists());
-        assert!(dkim_dir.join(format!("{selector}.public")).exists());
-        assert!(dkim_dir.join(format!("{selector}.dns")).exists());
         let config_root = dir.path().join("config");
         assert!(config_root.join("postfix/main.cf").exists());
         assert!(config_root.join("rspamd/local.d/rate_limit.conf").exists());
         assert!(config_root.join("letsencrypt/README.txt").exists());
         let env_contents = std::fs::read_to_string(&env_path).unwrap();
-        assert!(env_contents.contains("dmarc_policy=none"));
+        assert!(env_contents.contains("smtp_starttls=true"));
         std::fs::write(&env_path, "logging=off\n").unwrap();
         let again = with_fake_ops_env(|| run(cli, env.clone()).unwrap());
         assert!(again.contains("installed"));
@@ -2218,7 +2189,6 @@ mod tests {
             let summary = install(&env_path, &env, &logger).unwrap();
             assert!(summary.contains("installed"));
             assert_log_contains(&logger, "install.ensure");
-            assert_log_contains(&logger, "install.dkim.ready");
             assert_log_contains(&logger, "install.env.created");
 
             // Second invocation exercises the skipped-environment branch while

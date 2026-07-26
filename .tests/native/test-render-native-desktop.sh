@@ -814,6 +814,7 @@ swift_remote_server_setup_walkthrough_exists() {
   grep -Fq 'title: "Prepare TLS Tooling"' $generated_macos/Sources/App/App.swift
   grep -Fq 'title: "Run TLS Setup"' $generated_macos/Sources/App/App.swift
   grep -Fq 'MX target must be a hostname' $generated_macos/Sources/App/App.swift
+  grep -Fq "Set reverse DNS in the VPS provider's control panel" $generated_macos/Sources/App/App.swift
   grep -Fq 'private struct RemoteServerWalkthroughView: View' $generated_macos/Sources/App/App.swift
   grep -Fq 'private struct RemoteSetupStep<Content: View>: View' $generated_macos/Sources/App/App.swift
   grep -Fq 'private struct RemoteStatusPill: View' $generated_macos/Sources/App/App.swift
@@ -822,14 +823,15 @@ swift_remote_server_setup_walkthrough_exists() {
   grep -Fq 'title: "SSH Target"' $generated_macos/Sources/App/App.swift
   grep -Fq 'title: "SSH Authentication"' $generated_macos/Sources/App/App.swift
   grep -Fq 'title: "Deploy And Verify"' $generated_macos/Sources/App/App.swift
-  grep -Fq 'title: "Test And Sync"' $generated_macos/Sources/App/App.swift
+  grep -Fq 'title: "Test Sending And Check Mail"' $generated_macos/Sources/App/App.swift
   grep -Fq 'Toggle("SSH key has password"' $generated_macos/Sources/App/App.swift
   grep -Fq 'SecureField("SSH key password", text: $session.remoteKeyPasswordDraft)' $generated_macos/Sources/App/App.swift
   grep -Fq 'Save securely on this \(session.snapshot.settings.remote_auth.secrets_device_label)' $generated_macos/Sources/App/App.swift
   grep -Fq 'Label("Deploy Remote Server", systemImage: "shippingbox.and.arrow.backward")' $generated_macos/Sources/App/App.swift
   grep -Fq 'Label("Verify Remote Setup", systemImage: "network")' $generated_macos/Sources/App/App.swift
   grep -Fq 'Label("Check Remote Mail", systemImage: "arrow.triangle.2.circlepath")' $generated_macos/Sources/App/App.swift
-  grep -Fq 'Label("Send Test Email", systemImage: "paperplane")' $generated_macos/Sources/App/App.swift
+  grep -Fq 'Label("Test Outbound Sending", systemImage: "paperplane")' $generated_macos/Sources/App/App.swift
+  grep -Fq 'External test address (for example, you@gmail.com)' $generated_macos/Sources/App/App.swift
   grep -Fq 'Text(session.remoteStatusSummary)' $generated_macos/Sources/App/App.swift
   grep -Fq 'settings-remote-deploy)' scripts/stellar-backend.sh
   grep -Fq 'STELLAR_MAIL_LIST_TIMEOUT_SECONDS:-15' scripts/stellar-backend.sh
