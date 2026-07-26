@@ -27,6 +27,8 @@ grep -Fq 'cp scripts/stellar-mail-backend.sh' "$repo_dir/.github/workflows/nativ
 grep -Fq 'cp -R mail-engine' "$repo_dir/.github/workflows/native-release.yml"
 grep -Fq 'cargo build --manifest-path mail-engine/Cargo.toml --release --locked --bins' "$repo_dir/.github/workflows/native-release.yml"
 grep -Fq 'cargo test --manifest-path mail-engine/Cargo.toml --locked' "$repo_dir/.github/workflows/native-release.yml"
+grep -Fq 'name: stellar-mail-server-x86_64-linux' "$repo_dir/.github/workflows/native-release.yml"
+grep -Fq 'libexec/stellar-mail/remote/x86_64-linux' "$repo_dir/.github/workflows/native-release.yml"
 
 grep -Fq 'virtual_alias_domains=$domain_host' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 grep -Fq 'virtual_alias_maps=hash:/etc/postfix/stellar_virtual_aliases' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
@@ -34,6 +36,9 @@ grep -Fq "postconf -e 'mailbox_transport='" "$repo_dir/mail-engine/scripts/owl-d
 grep -Fq '/^stellar-inbox@localhost\$/ owlinbound:' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 ! grep -Fq '/^.+@${regex_domain}\$/ owlinbound:' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 ! grep -Fq 'andersaamodt/owl' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
+grep -Fq "SSH_KEYCHAIN_OPTIONS='-o AddKeysToAgent=yes -o UseKeychain=yes'" "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
+grep -Fq 'CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR="$target_dir" cargo build' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
+grep -Fq -- '--profile server' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 
 awk '
   /<<'\''REMOTE_DEPLOY'\''/ { capture = 1; next }

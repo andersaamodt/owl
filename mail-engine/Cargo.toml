@@ -46,3 +46,12 @@ libc = "0.2"
 [profile.release]
 lto = true
 codegen-units = 1
+
+[profile.server]
+inherits = "dev"
+debug = 0
+incremental = false
+strip = true
+
+[profile.server.package.owl]
+opt-level = 1

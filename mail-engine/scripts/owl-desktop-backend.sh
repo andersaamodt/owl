@@ -11,6 +11,12 @@ SMTP_SEND_TIMEOUT_SECS=5
 SEND_TEST_SYNC_RETRY_ATTEMPTS=2
 SEND_TEST_SYNC_RETRY_DELAY_SECS=1
 LLM_SPAM_TIMEOUT_SECS=14
+SSH_KEYCHAIN_OPTIONS=''
+if [ "$(uname -s 2>/dev/null || printf unknown)" = "Darwin" ] &&
+  command -v ssh >/dev/null 2>&1 &&
+  ssh -o UseKeychain=yes -G localhost >/dev/null 2>&1; then
+  SSH_KEYCHAIN_OPTIONS='-o AddKeysToAgent=yes -o UseKeychain=yes'
+fi
 
 usage() {
   cat <<'USAGE'
@@ -750,7 +756,7 @@ compact_status_message() {
   printf '%s' "${1-}" \
     | tr '\r\n' '  ' \
     | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' \
-    | cut -c1-420
+    | awk '{ if (length($0) > 420) print substr($0, length($0) - 419); else print }'
 }
 
 current_utc_timestamp() {
@@ -798,6 +804,7 @@ ssh_exec() {
   if [ -n "$ssh_port" ]; then
     run_with_ssh_askpass "$ssh_key_password" ssh \
       -i "$key_path" \
+      $SSH_KEYCHAIN_OPTIONS \
       -o BatchMode="$batch_mode" \
       -o IdentitiesOnly=yes \
       -o PreferredAuthentications=publickey \
@@ -810,6 +817,7 @@ ssh_exec() {
   fi
   run_with_ssh_askpass "$ssh_key_password" ssh \
     -i "$key_path" \
+    $SSH_KEYCHAIN_OPTIONS \
     -o BatchMode="$batch_mode" \
     -o IdentitiesOnly=yes \
     -o PreferredAuthentications=publickey \
@@ -817,107 +825,6 @@ ssh_exec() {
     -o StrictHostKeyChecking=accept-new \
     "$target_host" \
     "$@"
-}
-
-resolve_remote_rust_target() {
-  remote_os=$1
-  remote_arch=$2
-  case "$remote_os:$remote_arch" in
-    Linux:x86_64|Linux:amd64)
-      printf '%s\n' "x86_64-unknown-linux-musl"
-      return 0
-      ;;
-    Linux:aarch64|Linux:arm64)
-      printf '%s\n' "aarch64-unknown-linux-musl"
-      return 0
-      ;;
-    Linux:armv7l|Linux:armv7)
-      printf '%s\n' "armv7-unknown-linux-gnueabihf"
-      return 0
-      ;;
-    Darwin:x86_64)
-      printf '%s\n' "x86_64-apple-darwin"
-      return 0
-      ;;
-    Darwin:arm64|Darwin:aarch64)
-      printf '%s\n' "aarch64-apple-darwin"
-      return 0
-      ;;
-  esac
-  return 1
-}
-
-ensure_cross_tool() {
-  if command -v cross >/dev/null 2>&1; then
-    return 0
-  fi
-  if ! command -v cargo >/dev/null 2>&1; then
-    return 1
-  fi
-  if ! command -v docker >/dev/null 2>&1; then
-    return 1
-  fi
-  if cargo install cross --git https://github.com/cross-rs/cross >/dev/null 2>&1; then
-    return 0
-  fi
-  command -v cross >/dev/null 2>&1
-}
-
-build_local_target_binaries() {
-  build_target=$1
-  build_log=$(mktemp "${TMPDIR:-/tmp}/owl-local-build.XXXXXX")
-  build_tool=''
-
-  case "$build_target" in
-    *-unknown-linux-*)
-      if ensure_cross_tool; then
-        if (cd "$REPO_ROOT" && CARGO_NET_GIT_FETCH_WITH_CLI=true cross build --release --locked --target "$build_target" --bins >"$build_log" 2>&1); then
-          build_tool='cross'
-        else
-          tail -n 160 "$build_log" >&2 2>/dev/null || cat "$build_log" >&2
-          rm -f "$build_log"
-          return 1
-        fi
-      else
-        if command -v rustup >/dev/null 2>&1; then
-          rustup target add "$build_target" >/dev/null 2>&1 || :
-        fi
-        if (cd "$REPO_ROOT" && CARGO_TARGET_DIR="$(owl_cargo_target_dir)" cargo build --release --locked --target "$build_target" --bins >"$build_log" 2>&1); then
-          build_tool='cargo'
-        else
-          tail -n 160 "$build_log" >&2 2>/dev/null || cat "$build_log" >&2
-          rm -f "$build_log"
-          return 1
-        fi
-      fi
-      ;;
-    *)
-      if command -v rustup >/dev/null 2>&1; then
-        rustup target add "$build_target" >/dev/null 2>&1 || :
-      fi
-      if (cd "$REPO_ROOT" && CARGO_TARGET_DIR="$(owl_cargo_target_dir)" cargo build --release --locked --target "$build_target" --bins >"$build_log" 2>&1); then
-        build_tool='cargo'
-      else
-        tail -n 160 "$build_log" >&2 2>/dev/null || cat "$build_log" >&2
-        rm -f "$build_log"
-        return 1
-      fi
-      ;;
-  esac
-
-  rm -f "$build_log"
-
-  local_owl_bin=$(owl_compiled_binary_path owl release "$build_target")
-  local_owl_daemon_bin=$(owl_compiled_binary_path owl-daemon release "$build_target")
-  if [ ! -x "$local_owl_bin" ] || [ ! -x "$local_owl_daemon_bin" ]; then
-    printf '%s\n' "local build completed but expected binaries were not found for target $build_target" >&2
-    return 1
-  fi
-
-  printf 'local_build_target=%s\n' "$build_target"
-  printf 'local_build_tool=%s\n' "$build_tool"
-  printf 'local_owl_bin=%s\n' "$local_owl_bin"
-  printf 'local_owl_daemon_bin=%s\n' "$local_owl_daemon_bin"
 }
 
 scp_put_file_remote() {
@@ -932,6 +839,7 @@ scp_put_file_remote() {
   if [ -n "$ssh_port" ]; then
     run_with_ssh_askpass "$ssh_key_password" scp \
       -i "$key_path" \
+      $SSH_KEYCHAIN_OPTIONS \
       -o BatchMode="$batch_mode" \
       -o IdentitiesOnly=yes \
       -o PreferredAuthentications=publickey \
@@ -945,6 +853,7 @@ scp_put_file_remote() {
 
   run_with_ssh_askpass "$ssh_key_password" scp \
     -i "$key_path" \
+    $SSH_KEYCHAIN_OPTIONS \
     -o BatchMode="$batch_mode" \
     -o IdentitiesOnly=yes \
     -o PreferredAuthentications=publickey \
@@ -954,43 +863,43 @@ scp_put_file_remote() {
     "$target_host:$remote_path"
 }
 
-upload_local_binaries_to_remote() {
+install_bundled_binaries_on_remote() {
   target_host=$1
   key_path=$2
   ssh_key_password=${3-}
   ssh_port=${4-}
-  local_owl_bin=$5
-  local_owl_daemon_bin=$6
-  local_service_helper="$REPO_ROOT/scripts/owl-daemon-service"
-  local_owld_wrapper="$REPO_ROOT/scripts/owld"
+  binary_dir=$5
+  archive=$(mktemp "${TMPDIR:-/tmp}/stellar-mail-engine-bin.XXXXXX.tar.gz")
+  COPYFILE_DISABLE=1 tar -czf "$archive" \
+    -C "$binary_dir" owl owl-daemon \
+    -C "$REPO_ROOT" scripts/owl-daemon-service scripts/owld
 
   batch_mode=yes
   if [ -n "$ssh_key_password" ]; then
     batch_mode=no
   fi
-
-  ssh_exec "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" 'mkdir -p "$HOME/.local/bin"'
-
-  if ! scp_put_file_remote "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" "$batch_mode" "$local_owl_bin" "~/.local/bin/.owl.upload.tmp"; then
+  ssh_exec "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" 'mkdir -p "$HOME/.cache" "$HOME/.local/bin"'
+  if ! scp_put_file_remote "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" "$batch_mode" "$archive" "~/.cache/.stellar-mail-engine-bin.upload.tgz"; then
+    rm -f "$archive"
     return 1
   fi
-  if ! scp_put_file_remote "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" "$batch_mode" "$local_owl_daemon_bin" "~/.local/bin/.owl-daemon.upload.tmp"; then
-    return 1
-  fi
+  rm -f "$archive"
 
-  if [ -x "$local_service_helper" ]; then
-    if ! scp_put_file_remote "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" "$batch_mode" "$local_service_helper" "~/.local/bin/.owl-daemon-service.upload.tmp"; then
-      return 1
-    fi
-  fi
-
-  if [ -x "$local_owld_wrapper" ]; then
-    if ! scp_put_file_remote "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" "$batch_mode" "$local_owld_wrapper" "~/.local/bin/.owld.upload.tmp"; then
-      return 1
-    fi
-  fi
-
-  ssh_exec "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" 'mv "$HOME/.local/bin/.owl.upload.tmp" "$HOME/.local/bin/owl" && mv "$HOME/.local/bin/.owl-daemon.upload.tmp" "$HOME/.local/bin/owl-daemon" && if [ -f "$HOME/.local/bin/.owl-daemon-service.upload.tmp" ]; then mv "$HOME/.local/bin/.owl-daemon-service.upload.tmp" "$HOME/.local/bin/owl-daemon-service"; fi && if [ -f "$HOME/.local/bin/.owld.upload.tmp" ]; then mv "$HOME/.local/bin/.owld.upload.tmp" "$HOME/.local/bin/owld"; fi && chmod 0755 "$HOME/.local/bin/owl" "$HOME/.local/bin/owl-daemon" && if [ -f "$HOME/.local/bin/owl-daemon-service" ]; then chmod 0755 "$HOME/.local/bin/owl-daemon-service"; fi && if [ -f "$HOME/.local/bin/owld" ]; then chmod 0755 "$HOME/.local/bin/owld"; else ln -sf "$HOME/.local/bin/owl-daemon" "$HOME/.local/bin/owld"; fi'
+  ssh_exec "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" sh -s <<'REMOTE_BINARY_INSTALL'
+set -eu
+tmp_dir=$(mktemp -d "$HOME/.cache/stellar-mail-engine-bin.XXXXXX")
+cleanup() {
+  rm -rf "$tmp_dir"
+  rm -f "$HOME/.cache/.stellar-mail-engine-bin.upload.tgz"
+}
+trap cleanup EXIT INT TERM
+tar -xzf "$HOME/.cache/.stellar-mail-engine-bin.upload.tgz" -C "$tmp_dir"
+install -m 0755 "$tmp_dir/owl" "$HOME/.local/bin/owl"
+install -m 0755 "$tmp_dir/owl-daemon" "$HOME/.local/bin/owl-daemon"
+install -m 0755 "$tmp_dir/scripts/owl-daemon-service" "$HOME/.local/bin/owl-daemon-service"
+install -m 0755 "$tmp_dir/scripts/owld" "$HOME/.local/bin/owld"
+printf '%s\n' "remote_binary_install=ok"
+REMOTE_BINARY_INSTALL
 }
 
 build_bundled_source_on_remote() {
@@ -999,7 +908,7 @@ build_bundled_source_on_remote() {
   ssh_key_password=${3-}
   ssh_port=${4-}
   archive=$(mktemp "${TMPDIR:-/tmp}/stellar-mail-engine-source.XXXXXX.tar.gz")
-  tar -czf "$archive" \
+  COPYFILE_DISABLE=1 tar -czf "$archive" \
     -C "$REPO_ROOT" \
     Cargo.toml Cargo.lock src \
     scripts/owl-daemon-service scripts/owld
@@ -1030,69 +939,51 @@ if ! command -v cargo >/dev/null 2>&1; then
   fi
 fi
 
-source_dir=$(mktemp -d "$HOME/.cache/stellar-mail-engine-source.XXXXXX")
+source_dir="$HOME/.cache/stellar-mail-engine/source"
+target_dir="$HOME/.cache/stellar-mail-engine/target"
 cleanup() {
-  rm -rf "$source_dir"
   rm -f "$HOME/.cache/.stellar-mail-engine-source.upload.tgz"
 }
 trap cleanup EXIT INT TERM
+rm -rf "$source_dir"
+mkdir -p "$source_dir" "$target_dir"
 tar -xzf "$HOME/.cache/.stellar-mail-engine-source.upload.tgz" -C "$source_dir"
-CARGO_TARGET_DIR="$source_dir/target" cargo build \
+CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR="$target_dir" cargo build \
   --manifest-path "$source_dir/Cargo.toml" \
-  --release \
+  --profile server \
   --locked \
   --bins
-install -m 0755 "$source_dir/target/release/owl" "$HOME/.local/bin/owl"
-install -m 0755 "$source_dir/target/release/owl-daemon" "$HOME/.local/bin/owl-daemon"
+install -m 0755 "$target_dir/server/owl" "$HOME/.local/bin/owl"
+install -m 0755 "$target_dir/server/owl-daemon" "$HOME/.local/bin/owl-daemon"
 install -m 0755 "$source_dir/scripts/owl-daemon-service" "$HOME/.local/bin/owl-daemon-service"
 install -m 0755 "$source_dir/scripts/owld" "$HOME/.local/bin/owld"
 printf '%s\n' "remote_source_build=ok"
 REMOTE_SOURCE_BUILD
 }
 
-prepare_local_binaries_for_remote() {
+install_bundled_engine_on_remote() {
   target_host=$1
   key_path=$2
   ssh_key_password=${3-}
   ssh_port=${4-}
 
   remote_platform=$(ssh_exec "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" 'printf "%s:%s\n" "$(uname -s 2>/dev/null || printf unknown)" "$(uname -m 2>/dev/null || printf unknown)"')
-  remote_os=$(printf '%s\n' "$remote_platform" | awk -F: 'NR==1{print $1}')
-  remote_arch=$(printf '%s\n' "$remote_platform" | awk -F: 'NR==1{print $2}')
-  if [ -z "$remote_os" ] || [ -z "$remote_arch" ]; then
-    printf '%s\n' "unable to determine remote platform via SSH" >&2
-    return 1
+  case "$remote_platform" in
+    Linux:x86_64|Linux:amd64) platform_key=x86_64-linux ;;
+    Linux:aarch64|Linux:arm64) platform_key=aarch64-linux ;;
+    *) platform_key='' ;;
+  esac
+  binary_root=${STELLAR_REMOTE_ENGINE_BIN_ROOT-}
+  binary_dir="$binary_root/$platform_key"
+  if [ -n "$binary_root" ] && [ -n "$platform_key" ] &&
+    [ -x "$binary_dir/owl" ] && [ -x "$binary_dir/owl-daemon" ]; then
+    install_bundled_binaries_on_remote "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" "$binary_dir"
+    printf 'bundled_engine_install=prebuilt:%s\n' "$platform_key"
+    return 0
   fi
 
-  if ! build_target=$(resolve_remote_rust_target "$remote_os" "$remote_arch"); then
-    printf '%s\n' "unsupported remote platform for local deploy build: $remote_os/$remote_arch" >&2
-    return 1
-  fi
-
-  if ! build_output=$(build_local_target_binaries "$build_target"); then
-    if build_bundled_source_on_remote "$target_host" "$key_path" "$ssh_key_password" "$ssh_port"; then
-      printf 'local_build_target=%s\n' "$build_target"
-      printf '%s\n' "local_build_tool=remote-cargo"
-      printf '%s\n' "local_push=ok"
-      return 0
-    fi
-    return 1
-  fi
-  local_owl_bin=$(printf '%s\n' "$build_output" | awk -F= '/^local_owl_bin=/{sub(/^local_owl_bin=/, ""); print; exit}')
-  local_owl_daemon_bin=$(printf '%s\n' "$build_output" | awk -F= '/^local_owl_daemon_bin=/{sub(/^local_owl_daemon_bin=/, ""); print; exit}')
-  if [ -z "$local_owl_bin" ] || [ -z "$local_owl_daemon_bin" ]; then
-    printf '%s\n' "local build did not return deploy binary paths" >&2
-    return 1
-  fi
-
-  if ! upload_local_binaries_to_remote "$target_host" "$key_path" "$ssh_key_password" "$ssh_port" "$local_owl_bin" "$local_owl_daemon_bin"; then
-    return 1
-  fi
-
-  printf '%s\n' "$build_output"
-  printf 'remote_os=%s\n' "$remote_os"
-  printf 'remote_arch=%s\n' "$remote_arch"
-  printf 'local_push=ok\n'
+  build_bundled_source_on_remote "$target_host" "$key_path" "$ssh_key_password" "$ssh_port"
+  printf '%s\n' "bundled_engine_install=source"
 }
 
 remote_deploy_over_ssh() {
@@ -1747,7 +1638,7 @@ remote_sync_over_ssh() {
   if [ -n "$ssh_key_password" ]; then
     rsync_batch_mode=no
   fi
-  rsync_ssh_cmd="ssh -i $(single_quote_for_sh "$key_path") -o BatchMode=$rsync_batch_mode -o IdentitiesOnly=yes -o PreferredAuthentications=publickey -o ConnectTimeout=$SSH_CONNECT_TIMEOUT_SECS -o StrictHostKeyChecking=accept-new"
+  rsync_ssh_cmd="ssh -i $(single_quote_for_sh "$key_path") $SSH_KEYCHAIN_OPTIONS -o BatchMode=$rsync_batch_mode -o IdentitiesOnly=yes -o PreferredAuthentications=publickey -o ConnectTimeout=$SSH_CONNECT_TIMEOUT_SECS -o StrictHostKeyChecking=accept-new"
   if [ -n "$ssh_port" ]; then
     rsync_ssh_cmd="$rsync_ssh_cmd -p $(single_quote_for_sh "$ssh_port")"
   fi
@@ -5493,16 +5384,16 @@ case "$action" in
       domain_autoset_note="Domain auto-set to $smtp_host_mail (SMTP host: $smtp_host) based on remote target."
     fi
 
-    if local_push_output=$(prepare_local_binaries_for_remote "$remote_host" "$remote_key_path" "$ssh_key_password" "$remote_port" 2>&1); then
+    if engine_install_output=$(install_bundled_engine_on_remote "$remote_host" "$remote_key_path" "$ssh_key_password" "$remote_port" 2>&1); then
       if remote_output=$(remote_deploy_over_ssh "$remote_host" "$remote_key_path" "$ssh_key_password" "$remote_port" "$smtp_host" "$remote_mail_host_hint" "${STELLAR_ADDRESS_ROUTES_B64-}" 2>&1); then
-        deploy_output=$(printf '%s\n%s\n' "$local_push_output" "$remote_output")
+        deploy_output=$(printf '%s\n%s\n' "$engine_install_output" "$remote_output")
         deploy_status=ok
       else
-        deploy_output=$(printf '%s\n%s\n' "$local_push_output" "$remote_output")
+        deploy_output=$(printf '%s\n%s\n' "$engine_install_output" "$remote_output")
         deploy_status=bad
       fi
     else
-      deploy_output=$local_push_output
+      deploy_output=$engine_install_output
       deploy_status=bad
     fi
 
@@ -5513,7 +5404,6 @@ case "$action" in
       deploy_status=ok
       startup_mode=$(printf '%s\n' "$deploy_output" | awk -F= '/^startup_mode=/{print $2; exit}')
       deploy_note=$(printf '%s\n' "$deploy_output" | awk -F= '/^note=/{sub(/^note=/, ""); print; exit}')
-      deploy_build_target=$(printf '%s\n' "$deploy_output" | awk -F= '/^local_build_target=/{print $2; exit}')
       email_domain=$(email_domain_from_smtp_host "$smtp_host")
       domain_configured_json=$(domain_configured_for_smtp_host "$smtp_host")
       if verify_json=$(remote_verify_status_json "$remote_host" "$remote_key_path" "$ssh_key_password" "$remote_port" "$smtp_host" "$email_domain" "$domain_configured_json" 2>&1); then
@@ -5536,9 +5426,6 @@ case "$action" in
       esac
       if [ -n "$deploy_note" ]; then
         deploy_message="$deploy_message $deploy_note"
-      fi
-      if [ -n "$deploy_build_target" ]; then
-        deploy_message="$deploy_message Local build target: $deploy_build_target."
       fi
       if [ -n "$domain_autoset_note" ]; then
         deploy_message="$deploy_message $domain_autoset_note"

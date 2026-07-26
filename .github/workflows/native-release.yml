@@ -33,11 +33,33 @@ jobs:
           CARGO_TARGET_DIR="$HOME/.local/state/stellar/mail-engine/cargo-target" \
             cargo test --manifest-path mail-engine/Cargo.toml --locked
 
+  server-engine:
+    name: Linux Mail Server Engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build server engine
+        run: |
+          set -eu
+          target_dir="$HOME/.local/state/stellar/mail-engine/cargo-target"
+          CARGO_TARGET_DIR="$target_dir" cargo build --manifest-path mail-engine/Cargo.toml --release --locked --bins
+          mkdir -p dist/x86_64-linux
+          cp "$target_dir/release/owl" "$target_dir/release/owl-daemon" dist/x86_64-linux/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stellar-mail-server-x86_64-linux
+          path: dist/x86_64-linux
+
   macos:
     name: macOS App
+    needs: server-engine
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: stellar-mail-server-x86_64-linux
+          path: dist/server-engine/x86_64-linux
       - name: Install tools
         run: brew install jq
       - name: Generate desktop targets
@@ -55,7 +77,7 @@ jobs:
         run: |
           set -eu
           app_dir="dist/Stellar.app"
-          mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources/scripts" "$app_dir/Contents/Resources/libexec/stellar-mail"
+          mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources/scripts" "$app_dir/Contents/Resources/libexec/stellar-mail/remote/x86_64-linux"
           cp "$HOME/.local/state/stellar/generated/macos/.build/release/stellar" "$app_dir/Contents/MacOS/Stellar"
           cp scripts/stellar-backend.sh "$app_dir/Contents/Resources/scripts/"
           cp scripts/stellar-mail-backend.sh "$app_dir/Contents/Resources/scripts/"
@@ -63,8 +85,9 @@ jobs:
           cp scripts/stellar-secure-chat-hook.sh "$app_dir/Contents/Resources/scripts/"
           cp "$HOME/.local/state/stellar/mail-engine/cargo-target/release/owl" "$app_dir/Contents/Resources/libexec/stellar-mail/"
           cp "$HOME/.local/state/stellar/mail-engine/cargo-target/release/owl-daemon" "$app_dir/Contents/Resources/libexec/stellar-mail/"
+          cp dist/server-engine/x86_64-linux/owl dist/server-engine/x86_64-linux/owl-daemon "$app_dir/Contents/Resources/libexec/stellar-mail/remote/x86_64-linux/"
           cp -R mail-engine "$app_dir/Contents/Resources/mail-engine"
-          chmod +x "$app_dir/Contents/MacOS/Stellar" "$app_dir"/Contents/Resources/scripts/*.sh
+          chmod +x "$app_dir/Contents/MacOS/Stellar" "$app_dir"/Contents/Resources/scripts/*.sh "$app_dir"/Contents/Resources/libexec/stellar-mail/remote/x86_64-linux/*
           cat >"$app_dir/Contents/Info.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -98,17 +121,18 @@ jobs:
 
   linux:
     name: Linux GTK
+    needs: server-engine
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: stellar-mail-server-x86_64-linux
+          path: dist/server-engine/x86_64-linux
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y jq build-essential pkg-config meson ninja-build libgtk-4-dev
       - name: Generate desktop targets
         run: sh scripts/render-native-desktop.sh
-      - name: Build bundled mail engine
-        run: |
-          CARGO_TARGET_DIR="$HOME/.local/state/stellar/mail-engine/cargo-target" \
-            cargo build --manifest-path mail-engine/Cargo.toml --release --locked --bins
       - name: Build Linux executable
         run: |
           set -eu
@@ -119,16 +143,16 @@ jobs:
         run: |
           set -eu
           bundle="dist/stellar-linux-x86_64"
-          mkdir -p "$bundle/scripts" "$bundle/libexec/stellar-mail"
+          mkdir -p "$bundle/scripts" "$bundle/libexec/stellar-mail/remote/x86_64-linux"
           cp "$HOME/.local/state/stellar/generated/linux/build/stellar" "$bundle/stellar"
           cp scripts/stellar-backend.sh "$bundle/scripts/"
           cp scripts/stellar-mail-backend.sh "$bundle/scripts/"
           cp scripts/stellar-simplex-local-hook.sh "$bundle/scripts/"
           cp scripts/stellar-secure-chat-hook.sh "$bundle/scripts/"
-          cp "$HOME/.local/state/stellar/mail-engine/cargo-target/release/owl" "$bundle/libexec/stellar-mail/"
-          cp "$HOME/.local/state/stellar/mail-engine/cargo-target/release/owl-daemon" "$bundle/libexec/stellar-mail/"
+          cp dist/server-engine/x86_64-linux/owl dist/server-engine/x86_64-linux/owl-daemon "$bundle/libexec/stellar-mail/"
+          cp dist/server-engine/x86_64-linux/owl dist/server-engine/x86_64-linux/owl-daemon "$bundle/libexec/stellar-mail/remote/x86_64-linux/"
           cp -R mail-engine "$bundle/mail-engine"
-          chmod +x "$bundle/stellar" "$bundle"/scripts/*.sh
+          chmod +x "$bundle/stellar" "$bundle"/scripts/*.sh "$bundle"/libexec/stellar-mail/owl "$bundle"/libexec/stellar-mail/owl-daemon "$bundle"/libexec/stellar-mail/remote/x86_64-linux/*
           tar -czf dist/stellar-linux-x86_64.tar.gz -C dist stellar-linux-x86_64
       - uses: actions/upload-artifact@v4
         with:

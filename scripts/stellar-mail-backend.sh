@@ -6,6 +6,7 @@ script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
 engine_root="$repo_root/mail-engine"
 engine_backend="$engine_root/scripts/owl-desktop-backend.sh"
+remote_engine_bin_root="${STELLAR_REMOTE_ENGINE_BIN_ROOT:-$repo_root/libexec/stellar-mail/remote}"
 
 [ -f "$engine_root/Cargo.toml" ] || {
   printf '%s\n' "stellar-mail-backend: bundled mail engine source is missing" >&2
@@ -13,6 +14,7 @@ engine_backend="$engine_root/scripts/owl-desktop-backend.sh"
 }
 
 export OWL_BUILD_STATE_ROOT="${STELLAR_MAIL_ENGINE_BUILD_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/stellar/mail-engine}"
+export STELLAR_REMOTE_ENGINE_BIN_ROOT="$remote_engine_bin_root"
 
 if [ -n "${STELLAR_MAIL_ENGINE_BIN-}" ]; then
   export OWL_BIN="$STELLAR_MAIL_ENGINE_BIN"
