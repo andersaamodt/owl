@@ -36,6 +36,8 @@ grep -Fq 'virtual_alias_maps=hash:/etc/postfix/stellar_virtual_aliases' "$repo_d
 grep -Fq 'cert_dir="$remote_root/config/letsencrypt/live/$mail_hostname"' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 grep -Fq "postconf -e 'mailbox_transport='" "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 test "$(grep -Fc 'postconf -e "smtpd_tls_cert_file=' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh")" -ge 2
+grep -Fq 'stellar-certbot-renew.timer' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
+grep -Fq 'chown -R root:root "$cert_config_dir"' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 grep -Fq '/^stellar-inbox@localhost\$/ owlinbound:' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 ! grep -Fq '/^.+@${regex_domain}\$/ owlinbound:' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 ! grep -Fq 'andersaamodt/owl' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"

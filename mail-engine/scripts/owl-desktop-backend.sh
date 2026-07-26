@@ -1809,25 +1809,31 @@ remote_active_http_service_name() {
   printf '%s' ''
 }
 
+ensure_certbot_root_layout() {
+  cert_config_dir="$remote_root/config/letsencrypt"
+  remote_run_as_root sh -s -- "$cert_config_dir" <<'CERTBOT_ROOT_LAYOUT'
+set -eu
+cert_config_dir=$1
+mkdir -p "$cert_config_dir/work" "$cert_config_dir/logs" "$cert_config_dir/hooks"
+cat >"$cert_config_dir/hooks/reload-postfix.sh" <<'HOOK'
+#!/bin/sh
+systemctl reload postfix >/dev/null 2>&1 || true
+HOOK
+chmod 0700 "$cert_config_dir/hooks/reload-postfix.sh"
+chown -R root:root "$cert_config_dir"
+chmod 0700 "$cert_config_dir"
+CERTBOT_ROOT_LAYOUT
+}
+
 run_remote_certbot_http() {
   cert_config_dir="$remote_root/config/letsencrypt"
   cert_work_dir="$cert_config_dir/work"
   cert_logs_dir="$cert_config_dir/logs"
-  cert_hook_dir="$cert_config_dir/hooks"
-  cert_hook="$cert_hook_dir/reload-postfix.sh"
   cert_email="postmaster@$remote_email_domain"
-  owner_group="$(id -un):$(id -gn)"
   stopped_http_service=''
   certbot_failed=false
 
-  mkdir -p "$cert_work_dir" "$cert_logs_dir" "$cert_hook_dir"
-  if [ ! -f "$cert_hook" ]; then
-    cat >"$cert_hook" <<'HOOK'
-#!/bin/sh
-systemctl reload postfix >/dev/null 2>&1 || true
-HOOK
-    chmod +x "$cert_hook"
-  fi
+  ensure_certbot_root_layout
 
   if remote_port80_busy; then
     stopped_http_service=$(remote_active_http_service_name)
@@ -1847,7 +1853,6 @@ HOOK
     --config-dir "$cert_config_dir" \
     --work-dir "$cert_work_dir" \
     --logs-dir "$cert_logs_dir" \
-    --deploy-hook "$cert_hook" \
     --email "$cert_email" \
     -d "$remote_smtp_host" 2>&1); then
     :
@@ -1868,8 +1873,82 @@ HOOK
   fi
 
   printf '%s\n' "$certbot_output"
-  remote_run_as_root chown -R "$owner_group" "$cert_config_dir" >/dev/null 2>&1 || true
   return 0
+}
+
+ensure_remote_cert_renewal() {
+  cert_config_dir="$remote_root/config/letsencrypt"
+  certbot_bin=$(command -v certbot 2>/dev/null || true)
+  [ -n "$certbot_bin" ] || return 1
+  ensure_certbot_root_layout
+  remote_run_as_root sh -s -- "$certbot_bin" "$cert_config_dir" <<'STELLAR_CERT_RENEWAL'
+set -eu
+certbot_bin=$1
+cert_config_dir=$2
+renew_script=/usr/local/sbin/stellar-certbot-renew
+
+cat >"$renew_script" <<'RENEW_SCRIPT'
+#!/bin/sh
+set -eu
+certbot_bin=$1
+cert_config_dir=$2
+shift 2
+stopped_http_service=''
+
+restart_http_service() {
+  if [ -n "$stopped_http_service" ]; then
+    systemctl start "$stopped_http_service" >/dev/null 2>&1 || true
+  fi
+}
+trap restart_http_service EXIT HUP INT TERM
+
+for service_name in nginx apache2 httpd caddy; do
+  if systemctl is-active --quiet "$service_name" 2>/dev/null; then
+    stopped_http_service=$service_name
+    systemctl stop "$service_name"
+    break
+  fi
+done
+
+"$certbot_bin" renew \
+  --non-interactive \
+  --no-random-sleep-on-renew \
+  --config-dir "$cert_config_dir" \
+  --work-dir "$cert_config_dir/work" \
+  --logs-dir "$cert_config_dir/logs" \
+  "$@"
+systemctl reload postfix
+RENEW_SCRIPT
+chmod 0700 "$renew_script"
+
+cat >/etc/systemd/system/stellar-certbot-renew.service <<EOF
+[Unit]
+Description=Renew Stellar mail TLS certificate
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$renew_script $certbot_bin $cert_config_dir
+EOF
+
+cat >/etc/systemd/system/stellar-certbot-renew.timer <<'EOF'
+[Unit]
+Description=Renew Stellar mail TLS certificate twice daily
+
+[Timer]
+OnCalendar=*-*-* 00,12:00:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now stellar-certbot-renew.timer
+systemctl is-enabled --quiet stellar-certbot-renew.timer
+STELLAR_CERT_RENEWAL
 }
 
 remote_ssl_days_from_not_after() {
@@ -1917,7 +1996,7 @@ remote_emit_ssl_status() {
     do
       cand_cert="$base/fullchain.pem"
       cand_key="$base/privkey.pem"
-      if [ -f "$cand_cert" ] && [ -f "$cand_key" ]; then
+      if remote_run_as_root test -f "$cand_cert" && remote_run_as_root test -f "$cand_key"; then
         cert_file=$cand_cert
         key_file=$cand_key
         break 2
@@ -1931,7 +2010,7 @@ remote_emit_ssl_status() {
     do
       cand_cert="$base/fullchain.pem"
       cand_key="$base/privkey.pem"
-      if [ -f "$cand_cert" ] && [ -f "$cand_key" ]; then
+      if remote_run_as_root test -f "$cand_cert" && remote_run_as_root test -f "$cand_key"; then
         cert_file=$cand_cert
         key_file=$cand_key
         break
@@ -1943,7 +2022,7 @@ remote_emit_ssl_status() {
     ssl_ready=true
     ssl_cert_path=$cert_file
     if command -v openssl >/dev/null 2>&1; then
-      ssl_expires_at=$(openssl x509 -enddate -noout -in "$cert_file" 2>/dev/null | sed 's/^notAfter=//')
+      ssl_expires_at=$(remote_run_as_root openssl x509 -enddate -noout -in "$cert_file" 2>/dev/null | sed 's/^notAfter=//')
       if [ -n "$ssl_expires_at" ]; then
         if days_val=$(remote_ssl_days_from_not_after "$ssl_expires_at" 2>/dev/null); then
           ssl_days_remaining=$days_val
@@ -2013,6 +2092,11 @@ if [ -n "$install_output" ]; then
 fi
 if [ -n "$certbot_output" ]; then
   printf '%s\n' "$certbot_output"
+fi
+
+if ! ensure_remote_cert_renewal; then
+  printf '%s\n' "remote ssl setup: failed to configure automatic certificate renewal" >&2
+  exit 1
 fi
 
 if [ "$ssl_ready" = "true" ] && command -v postconf >/dev/null 2>&1; then

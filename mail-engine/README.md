@@ -25,6 +25,8 @@ OWL_BUILD_STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/stellar/mail-engine"
 Receiving-address configuration belongs to the user's mail root at
 `~/mail/.stellar/mail-addresses.json`. It is managed through
 `../scripts/stellar-mail-backend.sh`, not by editing Postfix files manually.
+TLS setup keeps Certbot state root-owned and installs a twice-daily renewal
+timer that safely releases port 80 for the standalone challenge.
 
 The imported engine was originally developed as Owl and remains available under
 the permissive terms in `LICENSE`.
