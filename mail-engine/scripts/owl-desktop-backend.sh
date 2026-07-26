@@ -891,11 +891,22 @@ tmp_dir=$(mktemp -d "$HOME/.cache/stellar-mail-engine-bin.XXXXXX")
 cleanup() {
   rm -rf "$tmp_dir"
   rm -f "$HOME/.cache/.stellar-mail-engine-bin.upload.tgz"
+  rm -f "$HOME/.local/bin/.owl.staged" "$HOME/.local/bin/.owl-daemon.staged"
 }
 trap cleanup EXIT INT TERM
 tar -xzf "$HOME/.cache/.stellar-mail-engine-bin.upload.tgz" -C "$tmp_dir"
-install -m 0755 "$tmp_dir/owl" "$HOME/.local/bin/owl"
-install -m 0755 "$tmp_dir/owl-daemon" "$HOME/.local/bin/owl-daemon"
+install -m 0755 "$tmp_dir/owl" "$HOME/.local/bin/.owl.staged"
+install -m 0755 "$tmp_dir/owl-daemon" "$HOME/.local/bin/.owl-daemon.staged"
+"$HOME/.local/bin/.owl.staged" --version >/dev/null
+"$HOME/.local/bin/.owl-daemon.staged" --help >/dev/null
+if [ -x "$HOME/.local/bin/owl" ]; then
+  cp -p "$HOME/.local/bin/owl" "$HOME/.local/bin/.owl.previous"
+fi
+if [ -x "$HOME/.local/bin/owl-daemon" ]; then
+  cp -p "$HOME/.local/bin/owl-daemon" "$HOME/.local/bin/.owl-daemon.previous"
+fi
+mv "$HOME/.local/bin/.owl.staged" "$HOME/.local/bin/owl"
+mv "$HOME/.local/bin/.owl-daemon.staged" "$HOME/.local/bin/owl-daemon"
 install -m 0755 "$tmp_dir/scripts/owl-daemon-service" "$HOME/.local/bin/owl-daemon-service"
 install -m 0755 "$tmp_dir/scripts/owld" "$HOME/.local/bin/owld"
 printf '%s\n' "remote_binary_install=ok"

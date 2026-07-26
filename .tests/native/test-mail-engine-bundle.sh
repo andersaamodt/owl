@@ -29,6 +29,7 @@ grep -Fq 'cargo build --manifest-path mail-engine/Cargo.toml --release --locked 
 grep -Fq 'cargo test --manifest-path mail-engine/Cargo.toml --locked' "$repo_dir/.github/workflows/native-release.yml"
 grep -Fq 'name: stellar-mail-server-x86_64-linux' "$repo_dir/.github/workflows/native-release.yml"
 grep -Fq 'libexec/stellar-mail/remote/x86_64-linux' "$repo_dir/.github/workflows/native-release.yml"
+grep -Fq -- '--target x86_64-unknown-linux-musl' "$repo_dir/.github/workflows/native-release.yml"
 
 grep -Fq 'virtual_alias_domains=$domain_host' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"
 grep -Fq 'virtual_alias_maps=hash:/etc/postfix/stellar_virtual_aliases' "$repo_dir/mail-engine/scripts/owl-desktop-backend.sh"

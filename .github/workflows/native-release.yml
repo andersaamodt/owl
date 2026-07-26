@@ -38,13 +38,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install static Linux target
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          rustup target add x86_64-unknown-linux-musl
       - name: Build server engine
         run: |
           set -eu
           target_dir="$HOME/.local/state/stellar/mail-engine/cargo-target"
-          CARGO_TARGET_DIR="$target_dir" cargo build --manifest-path mail-engine/Cargo.toml --release --locked --bins
+          CARGO_TARGET_DIR="$target_dir" cargo build --manifest-path mail-engine/Cargo.toml --release --locked --bins --target x86_64-unknown-linux-musl
           mkdir -p dist/x86_64-linux
-          cp "$target_dir/release/owl" "$target_dir/release/owl-daemon" dist/x86_64-linux/
+          cp "$target_dir/x86_64-unknown-linux-musl/release/owl" "$target_dir/x86_64-unknown-linux-musl/release/owl-daemon" dist/x86_64-linux/
       - uses: actions/upload-artifact@v4
         with:
           name: stellar-mail-server-x86_64-linux
