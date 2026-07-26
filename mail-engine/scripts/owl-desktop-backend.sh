@@ -2575,7 +2575,7 @@ normalize_domain_input() {
 validate_domain_name() {
   domain=$1
   case "$domain" in
-    ''|.*|*..*|*.-*|*-.|*[^a-z0-9.-]*)
+    ''|.*|*..*|*.-*|*-.|*[!a-z0-9.-]*)
       return 1
       ;;
   esac
